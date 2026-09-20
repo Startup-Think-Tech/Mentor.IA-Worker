@@ -1,0 +1,45 @@
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Go build outputs
+/bin/
+/build/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go test and coverage outputs
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
+
+# Dependency/cache artifacts
+/vendor/
+
+# Runtime files
+/tmp/
+/logs/
+*.log
+*.pid
+
+# Local tooling
+.air.toml
+.task/
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

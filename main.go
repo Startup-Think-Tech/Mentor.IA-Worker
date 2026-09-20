@@ -11,6 +11,7 @@ func main() {
 
 	//func recebe um parametro c do tipo *gin.Context
 	//c contem o endereço de memoria de um gin.Context
+	//Context é um tipo vindo do pacote gin
 	
 	router.GET("/hello", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
