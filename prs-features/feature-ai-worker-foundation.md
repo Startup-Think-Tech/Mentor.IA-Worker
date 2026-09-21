@@ -66,9 +66,9 @@ NODE_ENV="development"
 DATABASE_URL="postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 RABBITMQ_URL="amqp://mentor_ia:mentor_ia@localhost:5672"
 RABBITMQ_INSIGHTS_QUEUE="insights_queue"
-AI_PROVIDER="openai"
+AI_PROVIDER="openrouter"
 AI_PROVIDER_API_KEY=""
-AI_MODEL="gpt-4o-mini"
+AI_MODEL="openrouter/free"
 AI_REQUEST_TIMEOUT_MS=60000
 INSIGHT_MAX_ATTEMPTS=3
 ```
