@@ -2,7 +2,7 @@
 
 Worker Go responsável por processar tarefas assíncronas de IA do Mentor.ia.
 
-Neste primeiro PR, o worker ainda não consome RabbitMQ, não conecta no PostgreSQL e não chama provedor de IA. A fundação inicial apenas organiza o entrypoint, configuração e logger para as próximas features.
+O worker consome mensagens de insights via RabbitMQ. Nesta etapa ele ainda não conecta no PostgreSQL e não chama o provedor de IA; ele apenas valida o bootstrap do broker, recebe mensagens, valida o payload e confirma ou rejeita a entrega.
 
 ## Estrutura
 
@@ -12,16 +12,53 @@ cmd/insights-worker/
 internal/
   config/
     config.go
+  insights/
+    consumer.go
+    message.go
   platform/
     logger/
       logger.go
+    rabbitmq/
+      client.go
+  testsupport/
+    env.go
 ```
 
 ## Responsabilidades
 
 - `cmd/insights-worker`: ponto de entrada do processo.
 - `internal/config`: leitura e validação de variáveis de ambiente.
+- `internal/insights`: validação da mensagem de insight e consumer de negócio.
 - `internal/platform/logger`: configuração de logs estruturados.
+- `internal/platform/rabbitmq`: conexão, canal, fila, prefetch e consumo técnico do RabbitMQ.
+- `internal/testsupport`: helpers reutilizáveis para testes, incluindo carregamento do `.env` local.
+
+## Mensagem Esperada
+
+O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHTS_QUEUE`:
+
+```json
+{
+  "job_id": "uuid-do-job",
+  "aluno_id": "uuid-do-aluno"
+}
+```
+
+Mensagens válidas recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado.
+
+## Variáveis De Ambiente
+
+```env
+NODE_ENV="development"
+DATABASE_URL="postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
+RABBITMQ_URL="amqp://mentor_ia:mentor_ia@localhost:5672"
+RABBITMQ_INSIGHTS_QUEUE="insights_queue"
+AI_PROVIDER="openrouter"
+AI_PROVIDER_API_KEY=""
+AI_MODEL="openrouter/free"
+AI_REQUEST_TIMEOUT_MS=60000
+INSIGHT_MAX_ATTEMPTS=3
+```
 
 ## Setup Local
 
@@ -31,11 +68,21 @@ go mod tidy
 go run ./cmd/insights-worker
 ```
 
+Para o worker iniciar completamente, o RabbitMQ precisa estar acessível em `RABBITMQ_URL`.
+
 ## Testes
 
 ```bash
-go test ./...
+go test ./cmd/insights-worker ./internal/config ./internal/insights ./internal/platform/logger ./internal/platform/rabbitmq
 ```
+
+Para validar conexão real com RabbitMQ usando `RABBITMQ_URL` e `RABBITMQ_INSIGHTS_QUEUE` do `.env`:
+
+```bash
+go test ./internal/platform/rabbitmq -run TestConnectWithEnv -v
+```
+
+Esse teste conecta no broker, declara a fila configurada, valida `prefetch = 1` e fecha a conexão.
 
 ## Segurança
 
