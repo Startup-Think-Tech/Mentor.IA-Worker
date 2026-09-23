@@ -14,7 +14,8 @@ type Delivery interface {
 }
 
 type Consumer struct {
-	logger *slog.Logger
+	service *Service
+	logger  *slog.Logger
 }
 
 type amqpDelivery struct {
@@ -33,8 +34,8 @@ func (d amqpDelivery) Nack(multiple bool, requeue bool) error {
 	return d.delivery.Nack(multiple, requeue)
 }
 
-func NewConsumer(logger *slog.Logger) *Consumer {
-	return &Consumer{logger: logger}
+func NewConsumer(logger *slog.Logger, service *Service) *Consumer {
+	return &Consumer{logger: logger, service: service}
 }
 
 func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) {
@@ -51,12 +52,12 @@ func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) {
 				return
 			}
 
-			c.handleDelivery(amqpDelivery{delivery: delivery})
+			c.handleDelivery(ctx, amqpDelivery{delivery: delivery})
 		}
 	}
 }
 
-func (c *Consumer) handleDelivery(delivery Delivery) {
+func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 	message, err := ParseMessage(delivery.Body())
 	if err != nil {
 		c.logger.Error("mensagem de insight invalida", "erro", err)
@@ -71,6 +72,18 @@ func (c *Consumer) handleDelivery(delivery Delivery) {
 		"job_id", message.JobID,
 		"aluno_id", message.AlunoID,
 	)
+
+	if err := c.service.Process(ctx, message); err != nil {
+		c.logger.Error(
+			"falha ao processar mensagem de insight",
+			"job_id", message.JobID,
+			"erro", err,
+		)
+		if nackErr := delivery.Nack(false, true); nackErr != nil {
+			c.logger.Error("falha ao reenfileirar mensagem de insight", "erro", nackErr)
+		}
+		return
+	}
 
 	if err := delivery.Ack(false); err != nil {
 		c.logger.Error("falha ao confirmar mensagem de insight", "erro", err)

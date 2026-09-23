@@ -61,7 +61,7 @@ func Load() (Config, error) {
 		RabbitMQURL:           getEnvString("RABBITMQ_URL", defaultRabbitMQURL),
 		RabbitMQInsightsQueue: getEnvString("RABBITMQ_INSIGHTS_QUEUE", defaultRabbitMQInsightsQueue),
 		AIProvider:            getEnvString("AI_PROVIDER", defaultAIProvider),
-		AIProviderAPIKey:      os.Getenv("AI_PROVIDER_API_KEY"),
+		AIProviderAPIKey:      strings.TrimSpace(os.Getenv("AI_PROVIDER_API_KEY")),
 		AIModel:               getEnvString("AI_MODEL", defaultAIModel),
 		AIRequestTimeout:      time.Duration(requestTimeoutMS) * time.Millisecond,
 		InsightMaxAttempts:    maxAttempts,
