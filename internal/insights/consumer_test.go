@@ -33,9 +33,12 @@ func (d *fakeDelivery) Nack(_ bool, requeue bool) error {
 
 func TestConsumerAcksValidMessage(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
-	consumer := NewConsumer(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeProcessor{}),
+	)
 
-	consumer.handleDelivery(delivery)
+	consumer.handleDelivery(context.Background(), delivery)
 
 	if !delivery.acked {
 		t.Fatal("valid delivery was not acked")
@@ -48,9 +51,12 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 
 func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`invalid`)}
-	consumer := NewConsumer(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeProcessor{}),
+	)
 
-	consumer.handleDelivery(delivery)
+	consumer.handleDelivery(context.Background(), delivery)
 
 	if !delivery.nacked {
 		t.Fatal("invalid delivery was not nacked")
@@ -65,11 +71,36 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	}
 }
 
+func TestConsumerNacksProcessingErrorWithRequeue(t *testing.T) {
+	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeProcessor{err: context.Canceled}),
+	)
+
+	consumer.handleDelivery(context.Background(), delivery)
+
+	if !delivery.nacked {
+		t.Fatal("failed processing delivery was not nacked")
+	}
+
+	if !delivery.requeueOnNack {
+		t.Fatal("failed processing delivery should be requeued")
+	}
+
+	if delivery.acked {
+		t.Fatal("failed processing delivery was acked")
+	}
+}
+
 func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	deliveries := make(chan amqp.Delivery)
-	consumer := NewConsumer(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeProcessor{}),
+	)
 	consumer.Run(ctx, deliveries)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/daviPeter07/ai-worker/internal/config"
 	"github.com/daviPeter07/ai-worker/internal/insights"
 	platformlogger "github.com/daviPeter07/ai-worker/internal/platform/logger"
+	"github.com/daviPeter07/ai-worker/internal/platform/postgres"
 	"github.com/daviPeter07/ai-worker/internal/platform/rabbitmq"
 )
 
@@ -26,6 +27,15 @@ func main() {
 
 	logger := platformlogger.New(cfg.NodeEnv)
 	logger.Info("worker de insights iniciando", cfg.LogAttrs()...)
+
+	postgresClient, err := postgres.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("falha ao preparar PostgreSQL", "erro", err)
+		os.Exit(1)
+	}
+	defer postgresClient.Close()
+
+	logger.Info("PostgreSQL preparado com sucesso")
 
 	rabbitClient, err := rabbitmq.Connect(rabbitmq.Config{
 		URL:       cfg.RabbitMQURL,
@@ -54,7 +64,9 @@ func main() {
 	}
 
 	logger.Info("worker aguardando mensagens de insights")
-	insightsConsumer := insights.NewConsumer(logger)
+	insightsRepository := insights.NewRepository(postgresClient.Pool())
+	insightsService := insights.NewService(insightsRepository)
+	insightsConsumer := insights.NewConsumer(logger, insightsService)
 	insightsConsumer.Run(ctx, deliveries)
 	logger.Info("worker de insights finalizado")
 }

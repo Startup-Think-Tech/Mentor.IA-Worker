@@ -2,7 +2,7 @@
 
 Worker Go responsável por processar tarefas assíncronas de IA do Mentor.ia.
 
-O worker consome mensagens de insights via RabbitMQ. Nesta etapa ele ainda não conecta no PostgreSQL e não chama o provedor de IA; ele apenas valida o bootstrap do broker, recebe mensagens, valida o payload e confirma ou rejeita a entrega.
+O worker consome mensagens de insights via RabbitMQ, conecta no PostgreSQL e processa jobs de insight com resultado fake. O cliente OpenRouter já existe, mas a geração real de conteúdo com IA fica para o próximo PR.
 
 ## Estrutura
 
@@ -10,14 +10,21 @@ O worker consome mensagens de insights via RabbitMQ. Nesta etapa ele ainda não 
 cmd/insights-worker/
   main.go
 internal/
+  ai/
+    openrouter/
+      client.go
   config/
     config.go
   insights/
     consumer.go
     message.go
+    repository.go
+    service.go
   platform/
     logger/
       logger.go
+    postgres/
+      client.go
     rabbitmq/
       client.go
   testsupport/
@@ -27,9 +34,11 @@ internal/
 ## Responsabilidades
 
 - `cmd/insights-worker`: ponto de entrada do processo.
+- `internal/ai/openrouter`: cliente HTTP para OpenRouter Chat Completions.
 - `internal/config`: leitura e validação de variáveis de ambiente.
-- `internal/insights`: validação da mensagem de insight e consumer de negócio.
+- `internal/insights`: validação da mensagem, consumer, service e repository do processamento de insights.
 - `internal/platform/logger`: configuração de logs estruturados.
+- `internal/platform/postgres`: conexão e pool PostgreSQL com `pgxpool`.
 - `internal/platform/rabbitmq`: conexão, canal, fila, prefetch e consumo técnico do RabbitMQ.
 - `internal/testsupport`: helpers reutilizáveis para testes, incluindo carregamento do `.env` local.
 
@@ -44,7 +53,19 @@ O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHT
 }
 ```
 
-Mensagens válidas recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado.
+Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado. Falhas de processamento recebem `Nack` com requeue até o PR de retry/DLQ definir a política final.
+
+## Processamento Atual
+
+Ao receber uma mensagem válida, o worker:
+
+- Busca o `InsightJob` por `job_id` e `aluno_id`.
+- Marca o job como `processando`.
+- Incrementa `tentativas`.
+- Salva um registro em `insights` com conteúdo fake.
+- Marca o job como `concluido`.
+
+O conteúdo fake atual é temporário. O próximo PR deve substituir isso por geração real com OpenRouter e política de falhas/retry.
 
 ## Variáveis De Ambiente
 
@@ -74,6 +95,14 @@ Para o worker iniciar completamente, o RabbitMQ precisa estar acessível em `RAB
 
 ```bash
 go test ./cmd/insights-worker ./internal/config ./internal/insights ./internal/platform/logger ./internal/platform/rabbitmq
+```
+
+Teste com PostgreSQL e RabbitMQ reais usando `.env`:
+
+```bash
+go test ./internal/platform/postgres -run TestConnectWithEnv -v
+go test ./internal/platform/rabbitmq -run TestConnectWithEnv -v
+go test ./internal/insights -run TestRepositoryProcessWithFakeResult -v
 ```
 
 Para validar conexão real com RabbitMQ usando `RABBITMQ_URL` e `RABBITMQ_INSIGHTS_QUEUE` do `.env`:
