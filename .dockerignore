@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+bin/
+build/
+dist/
+coverage.out
+coverage.html
+*.coverprofile
+*.prof
+*.log
+tmp/
+logs/
+cmd/teste-get/
+prs-features/
