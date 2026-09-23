@@ -2,7 +2,7 @@
 
 Worker Go responsável por processar tarefas assíncronas de IA do Mentor.ia.
 
-O worker consome mensagens de insights via RabbitMQ, conecta no PostgreSQL e processa jobs de insight com resultado fake. O cliente OpenRouter já existe, mas a geração real de conteúdo com IA fica para o próximo PR.
+O worker consome mensagens de insights via RabbitMQ, conecta no PostgreSQL, chama o OpenRouter e persiste o resultado gerado por IA.
 
 ## Estrutura
 
@@ -53,7 +53,7 @@ O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHT
 }
 ```
 
-Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado. Falhas de processamento recebem `Nack` com requeue até o PR de retry/DLQ definir a política final.
+Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado. Falhas que conseguem ser persistidas no banco como `aguardando_retentativa` ou `falhou` também recebem `Ack`; falhas inesperadas de infraestrutura recebem `Nack` com requeue.
 
 ## Processamento Atual
 
@@ -62,10 +62,14 @@ Ao receber uma mensagem válida, o worker:
 - Busca o `InsightJob` por `job_id` e `aluno_id`.
 - Marca o job como `processando`.
 - Incrementa `tentativas`.
-- Salva um registro em `insights` com conteúdo fake.
+- Busca até três disciplinas de menor desempenho.
+- Monta um prompt educacional curto.
+- Chama o OpenRouter com `AI_MODEL`.
+- Salva o conteúdo gerado em `insights`.
+- Associa as disciplinas usadas em `insights_disciplinas`.
 - Marca o job como `concluido`.
 
-O conteúdo fake atual é temporário. O próximo PR deve substituir isso por geração real com OpenRouter e política de falhas/retry.
+Se a geração ou persistência falhar, o worker atualiza o job para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou`.
 
 ## Variáveis De Ambiente
 
@@ -91,10 +95,12 @@ go run ./cmd/insights-worker
 
 Para o worker iniciar completamente, o RabbitMQ precisa estar acessível em `RABBITMQ_URL`.
 
+O OpenRouter também precisa estar configurado com `AI_PROVIDER_API_KEY`. O worker falha no bootstrap se a chave estiver ausente, para evitar consumir jobs que não podem ser processados.
+
 ## Testes
 
 ```bash
-go test ./cmd/insights-worker ./internal/config ./internal/insights ./internal/platform/logger ./internal/platform/rabbitmq
+go test ./cmd/insights-worker ./internal/config ./internal/insights ./internal/platform/logger ./internal/platform/rabbitmq ./internal/platform/postgres ./internal/testsupport ./internal/ai/openrouter
 ```
 
 Teste com PostgreSQL e RabbitMQ reais usando `.env`:
@@ -102,7 +108,7 @@ Teste com PostgreSQL e RabbitMQ reais usando `.env`:
 ```bash
 go test ./internal/platform/postgres -run TestConnectWithEnv -v
 go test ./internal/platform/rabbitmq -run TestConnectWithEnv -v
-go test ./internal/insights -run TestRepositoryProcessWithFakeResult -v
+go test ./internal/insights -run TestRepositoryProcessesRealInsightResult -v
 ```
 
 Para validar conexão real com RabbitMQ usando `RABBITMQ_URL` e `RABBITMQ_INSIGHTS_QUEUE` do `.env`:

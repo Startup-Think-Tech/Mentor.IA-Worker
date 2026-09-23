@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/daviPeter07/ai-worker/internal/ai/openrouter"
 	"github.com/daviPeter07/ai-worker/internal/config"
 	"github.com/daviPeter07/ai-worker/internal/insights"
 	platformlogger "github.com/daviPeter07/ai-worker/internal/platform/logger"
@@ -27,6 +28,23 @@ func main() {
 
 	logger := platformlogger.New(cfg.NodeEnv)
 	logger.Info("worker de insights iniciando", cfg.LogAttrs()...)
+
+	if cfg.AIProvider != "openrouter" {
+		logger.Error("provedor de IA nao suportado", "provider", cfg.AIProvider)
+		os.Exit(1)
+	}
+
+	aiClient, err := openrouter.New(openrouter.Config{
+		APIKey:  cfg.AIProviderAPIKey,
+		Model:   cfg.AIModel,
+		Timeout: cfg.AIRequestTimeout,
+	})
+	if err != nil {
+		logger.Error("falha ao preparar OpenRouter", "erro", err)
+		os.Exit(1)
+	}
+
+	logger.Info("OpenRouter preparado com sucesso")
 
 	postgresClient, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -65,7 +83,7 @@ func main() {
 
 	logger.Info("worker aguardando mensagens de insights")
 	insightsRepository := insights.NewRepository(postgresClient.Pool())
-	insightsService := insights.NewService(insightsRepository)
+	insightsService := insights.NewService(insightsRepository, aiClient, cfg.InsightMaxAttempts)
 	insightsConsumer := insights.NewConsumer(logger, insightsService)
 	insightsConsumer.Run(ctx, deliveries)
 	logger.Info("worker de insights finalizado")

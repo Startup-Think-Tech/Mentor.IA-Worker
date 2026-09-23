@@ -2,6 +2,7 @@ package insights
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -74,6 +75,18 @@ func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 	)
 
 	if err := c.service.Process(ctx, message); err != nil {
+		if errors.Is(err, ErrRetryScheduled) || errors.Is(err, ErrJobFailed) {
+			c.logger.Error(
+				"processamento de insight encerrado com status persistido",
+				"job_id", message.JobID,
+				"erro", err,
+			)
+			if ackErr := delivery.Ack(false); ackErr != nil {
+				c.logger.Error("falha ao confirmar mensagem com erro persistido", "erro", ackErr)
+			}
+			return
+		}
+
 		c.logger.Error(
 			"falha ao processar mensagem de insight",
 			"job_id", message.JobID,

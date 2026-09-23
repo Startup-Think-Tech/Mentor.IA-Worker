@@ -35,7 +35,7 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeProcessor{}),
+		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -53,7 +53,7 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`invalid`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeProcessor{}),
+		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -71,11 +71,11 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	}
 }
 
-func TestConsumerNacksProcessingErrorWithRequeue(t *testing.T) {
+func TestConsumerNacksUnexpectedProcessingErrorWithRequeue(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeProcessor{err: context.Canceled}),
+		NewService(&fakeStore{beginErr: context.Canceled}, &fakeAIClient{content: "Insight real"}, 3),
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -93,6 +93,24 @@ func TestConsumerNacksProcessingErrorWithRequeue(t *testing.T) {
 	}
 }
 
+func TestConsumerAcksRetryScheduledError(t *testing.T) {
+	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeStore{failureAction: FailureActionRetry}, &fakeAIClient{err: context.Canceled}, 3),
+	)
+
+	consumer.handleDelivery(context.Background(), delivery)
+
+	if !delivery.acked {
+		t.Fatal("retry scheduled delivery was not acked")
+	}
+
+	if delivery.nacked {
+		t.Fatal("retry scheduled delivery was nacked")
+	}
+}
+
 func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -100,7 +118,7 @@ func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	deliveries := make(chan amqp.Delivery)
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeProcessor{}),
+		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
 	)
 	consumer.Run(ctx, deliveries)
 }
