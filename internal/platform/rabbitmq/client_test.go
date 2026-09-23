@@ -8,14 +8,21 @@ import (
 )
 
 func TestConnectRejectsEmptyURL(t *testing.T) {
-	_, err := Connect(Config{QueueName: "insights_queue"})
+	_, err := Connect(Config{Queue: "insights_queue", DLQ: "insights_dlq"})
 	if err == nil {
 		t.Fatal("Connect() returned nil error")
 	}
 }
 
 func TestConnectRejectsEmptyQueueName(t *testing.T) {
-	_, err := Connect(Config{URL: "amqp://usuario:senha@rabbitmq.example.com:5672"})
+	_, err := Connect(Config{URL: "amqp://usuario:senha@rabbitmq.example.com:5672", DLQ: "insights_dlq"})
+	if err == nil {
+		t.Fatal("Connect() returned nil error")
+	}
+}
+
+func TestConnectRejectsEmptyDLQ(t *testing.T) {
+	_, err := Connect(Config{URL: "amqp://usuario:senha@rabbitmq.example.com:5672", Queue: "insights_queue"})
 	if err == nil {
 		t.Fatal("Connect() returned nil error")
 	}
@@ -34,9 +41,15 @@ func TestConnectWithEnv(t *testing.T) {
 		t.Skip("RABBITMQ_INSIGHTS_QUEUE nao configurada")
 	}
 
+	dlqName := os.Getenv("RABBITMQ_INSIGHTS_DLQ")
+	if dlqName == "" {
+		dlqName = "insights_dlq"
+	}
+
 	client, err := Connect(Config{
-		URL:       rabbitURL,
-		QueueName: queueName,
+		URL:   rabbitURL,
+		Queue: queueName,
+		DLQ:   dlqName,
 	})
 	if err != nil {
 		t.Fatalf("Connect() returned error: %v", err)
@@ -48,6 +61,10 @@ func TestConnectWithEnv(t *testing.T) {
 
 	if client.PrefetchCount() != prefetchCount {
 		t.Fatalf("PrefetchCount() = %d, want %d", client.PrefetchCount(), prefetchCount)
+	}
+
+	if client.DLQName() != dlqName {
+		t.Fatalf("DLQName() = %q, want %q", client.DLQName(), dlqName)
 	}
 
 	if err := client.Close(); err != nil {

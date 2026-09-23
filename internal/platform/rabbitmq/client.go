@@ -1,7 +1,10 @@
 package rabbitmq
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -10,6 +13,8 @@ const prefetchCount = 1
 
 type Config struct {
 	URL       string
+	Queue     string
+	DLQ       string
 	QueueName string
 }
 
@@ -17,15 +22,24 @@ type Client struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
 	queue      amqp.Queue
+	dlq        amqp.Queue
 }
 
 func Connect(config Config) (*Client, error) {
+	if config.Queue == "" {
+		config.Queue = config.QueueName
+	}
+
 	if config.URL == "" {
 		return nil, fmt.Errorf("RABBITMQ_URL nao pode estar vazio")
 	}
 
-	if config.QueueName == "" {
+	if config.Queue == "" {
 		return nil, fmt.Errorf("RABBITMQ_INSIGHTS_QUEUE nao pode estar vazio")
+	}
+
+	if config.DLQ == "" {
+		return nil, fmt.Errorf("RABBITMQ_INSIGHTS_DLQ nao pode estar vazio")
 	}
 
 	connection, err := amqp.Dial(config.URL)
@@ -40,7 +54,7 @@ func Connect(config Config) (*Client, error) {
 	}
 
 	queue, err := channel.QueueDeclare(
-		config.QueueName,
+		config.Queue,
 		true,
 		false,
 		false,
@@ -53,6 +67,20 @@ func Connect(config Config) (*Client, error) {
 		return nil, fmt.Errorf("falha ao declarar fila do RabbitMQ: %w", err)
 	}
 
+	dlq, err := channel.QueueDeclare(
+		config.DLQ,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return nil, fmt.Errorf("falha ao declarar DLQ do RabbitMQ: %w", err)
+	}
+
 	if err := channel.Qos(prefetchCount, 0, false); err != nil {
 		_ = channel.Close()
 		_ = connection.Close()
@@ -63,6 +91,7 @@ func Connect(config Config) (*Client, error) {
 		connection: connection,
 		channel:    channel,
 		queue:      queue,
+		dlq:        dlq,
 	}, nil
 }
 
@@ -72,6 +101,55 @@ func (c *Client) QueueName() string {
 
 func (c *Client) PrefetchCount() int {
 	return prefetchCount
+}
+
+func (c *Client) DLQName() string {
+	return c.dlq.Name
+}
+
+func (c *Client) PublishInsightMessage(ctx context.Context, payload any) error {
+	return c.publishJSON(ctx, c.queue.Name, payload)
+}
+
+func (c *Client) PublishToDLQ(ctx context.Context, payload any) error {
+	return c.publishJSON(ctx, c.dlq.Name, payload)
+}
+
+func (c *Client) PublishRawToDLQ(ctx context.Context, body []byte) error {
+	return c.channel.PublishWithContext(
+		ctx,
+		"",
+		c.dlq.Name,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType:  "application/octet-stream",
+			DeliveryMode: amqp.Persistent,
+			Timestamp:    time.Now(),
+			Body:         body,
+		},
+	)
+}
+
+func (c *Client) publishJSON(ctx context.Context, routingKey string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("falha ao serializar mensagem RabbitMQ: %w", err)
+	}
+
+	return c.channel.PublishWithContext(
+		ctx,
+		"",
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp.Persistent,
+			Timestamp:    time.Now(),
+			Body:         body,
+		},
+	)
 }
 
 func (c *Client) Consume(consumerName string) (<-chan amqp.Delivery, error) {

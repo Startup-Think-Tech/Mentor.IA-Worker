@@ -16,6 +16,30 @@ type fakeDelivery struct {
 	requeueOnNack bool
 }
 
+type fakeDeadLetterPublisher struct {
+	rawMessages  [][]byte
+	jsonMessages []any
+	err          error
+}
+
+func (p *fakeDeadLetterPublisher) PublishRawToDLQ(_ context.Context, body []byte) error {
+	if p.err != nil {
+		return p.err
+	}
+
+	p.rawMessages = append(p.rawMessages, body)
+	return nil
+}
+
+func (p *fakeDeadLetterPublisher) PublishToDLQ(_ context.Context, payload any) error {
+	if p.err != nil {
+		return p.err
+	}
+
+	p.jsonMessages = append(p.jsonMessages, payload)
+	return nil
+}
+
 func (d *fakeDelivery) Body() []byte {
 	return d.body
 }
@@ -36,6 +60,7 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeDeadLetterPublisher{},
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -51,23 +76,25 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 
 func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`invalid`)}
+	dlqPublisher := &fakeDeadLetterPublisher{}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		dlqPublisher,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
 
-	if !delivery.nacked {
-		t.Fatal("invalid delivery was not nacked")
+	if !delivery.acked {
+		t.Fatal("invalid delivery sent to DLQ was not acked")
 	}
 
-	if delivery.requeueOnNack {
-		t.Fatal("invalid delivery should not be requeued")
+	if delivery.nacked {
+		t.Fatal("invalid delivery sent to DLQ was nacked")
 	}
 
-	if delivery.acked {
-		t.Fatal("invalid delivery was acked")
+	if len(dlqPublisher.rawMessages) != 1 {
+		t.Fatalf("raw DLQ messages = %d, want 1", len(dlqPublisher.rawMessages))
 	}
 }
 
@@ -76,6 +103,7 @@ func TestConsumerNacksUnexpectedProcessingErrorWithRequeue(t *testing.T) {
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewService(&fakeStore{beginErr: context.Canceled}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeDeadLetterPublisher{},
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -98,6 +126,7 @@ func TestConsumerAcksRetryScheduledError(t *testing.T) {
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewService(&fakeStore{failureAction: FailureActionRetry}, &fakeAIClient{err: context.Canceled}, 3),
+		&fakeDeadLetterPublisher{},
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -111,6 +140,26 @@ func TestConsumerAcksRetryScheduledError(t *testing.T) {
 	}
 }
 
+func TestConsumerPublishesFinalFailureToDLQ(t *testing.T) {
+	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
+	dlqPublisher := &fakeDeadLetterPublisher{}
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		NewService(&fakeStore{failureAction: FailureActionFailed}, &fakeAIClient{err: context.Canceled}, 3),
+		dlqPublisher,
+	)
+
+	consumer.handleDelivery(context.Background(), delivery)
+
+	if !delivery.acked {
+		t.Fatal("final failed delivery was not acked")
+	}
+
+	if len(dlqPublisher.jsonMessages) != 1 {
+		t.Fatalf("json DLQ messages = %d, want 1", len(dlqPublisher.jsonMessages))
+	}
+}
+
 func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -119,6 +168,7 @@ func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeDeadLetterPublisher{},
 	)
 	consumer.Run(ctx, deliveries)
 }
