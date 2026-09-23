@@ -11,12 +11,15 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("NODE_ENV", "")
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("RABBITMQ_URL", "")
+	t.Setenv("RABBITMQ_INSIGHTS_DLQ", "")
 	t.Setenv("RABBITMQ_INSIGHTS_QUEUE", "")
 	t.Setenv("AI_PROVIDER", "")
 	t.Setenv("AI_PROVIDER_API_KEY", "")
 	t.Setenv("AI_MODEL", "")
 	t.Setenv("AI_REQUEST_TIMEOUT_MS", "")
 	t.Setenv("INSIGHT_MAX_ATTEMPTS", "")
+	t.Setenv("INSIGHT_RETRY_BATCH_SIZE", "")
+	t.Setenv("INSIGHT_RETRY_POLL_INTERVAL_MS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -34,6 +37,14 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.InsightMaxAttempts != defaultInsightMaxAttempts {
 		t.Fatalf("InsightMaxAttempts = %d, want %d", cfg.InsightMaxAttempts, defaultInsightMaxAttempts)
 	}
+
+	if cfg.RabbitMQInsightsDLQ != defaultRabbitMQInsightsDLQ {
+		t.Fatalf("RabbitMQInsightsDLQ = %q, want %q", cfg.RabbitMQInsightsDLQ, defaultRabbitMQInsightsDLQ)
+	}
+
+	if cfg.InsightRetryBatchSize != defaultInsightRetryBatchSize {
+		t.Fatalf("InsightRetryBatchSize = %d, want %d", cfg.InsightRetryBatchSize, defaultInsightRetryBatchSize)
+	}
 }
 
 func TestLoadRejectsInvalidInteger(t *testing.T) {
@@ -50,7 +61,10 @@ func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 	cfg := Config{
 		NodeEnv:               "development",
 		DatabaseURL:           "postgresql://user:pass@localhost:5432/db",
+		InsightRetryBatchSize: 10,
+		InsightRetryPoll:      time.Minute,
 		RabbitMQURL:           "amqp://user:pass@localhost:5672",
+		RabbitMQInsightsDLQ:   "insights_dlq",
 		RabbitMQInsightsQueue: "insights_queue",
 		AIProvider:            "openai",
 		AIProviderAPIKey:      apiKey,

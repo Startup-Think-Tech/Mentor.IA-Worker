@@ -136,3 +136,68 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 		t.Fatalf("associationCount = %d, want 1", associationCount)
 	}
 }
+
+func TestRepositoryClaimDueRetryJobs(t *testing.T) {
+	testsupport.LoadDotEnv(t)
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL nao configurada")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	postgresClient, err := postgres.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("postgres.Connect() returned error: %v", err)
+	}
+	defer postgresClient.Close()
+
+	pool := postgresClient.Pool()
+	alunoID := uuid.NewString()
+	jobID := uuid.NewString()
+	email := "worker-retry-test-" + uuid.NewString() + "@mentor.local"
+
+	defer func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM insight_jobs WHERE id = $1", jobID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM alunos WHERE id = $1", alunoID)
+	}()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO alunos (id, nome, email, senha_hash, atualizado_em)
+		VALUES ($1, $2, $3, $4, NOW())
+	`, alunoID, "Worker Retry Test", email, "hash"); err != nil {
+		t.Fatalf("failed to insert aluno: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO insight_jobs (id, aluno_id, status, idempotency_key, payload_hash, proxima_tentativa_em, atualizado_em)
+		VALUES ($1, $2, 'aguardando_retentativa', $3, $4, NOW() - INTERVAL '1 minute', NOW())
+	`, jobID, alunoID, "retry-key-"+jobID, "payload-hash"); err != nil {
+		t.Fatalf("failed to insert retry job: %v", err)
+	}
+
+	repository := NewRepository(pool)
+	messages, err := repository.ClaimDueRetryJobs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimDueRetryJobs() returned error: %v", err)
+	}
+
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want 1", len(messages))
+	}
+
+	if messages[0].JobID != jobID || messages[0].AlunoID != alunoID {
+		t.Fatalf("message = %#v, want job %s aluno %s", messages[0], jobID, alunoID)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status::text FROM insight_jobs WHERE id = $1`, jobID).Scan(&status); err != nil {
+		t.Fatalf("failed to select job status: %v", err)
+	}
+
+	if status != "pendente" {
+		t.Fatalf("status = %q, want pendente", status)
+	}
+}

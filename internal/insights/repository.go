@@ -204,3 +204,56 @@ func (r *Repository) RegisterFailure(ctx context.Context, message Message, maxAt
 
 	return FailureActionRetry, nil
 }
+
+func (r *Repository) ClaimDueRetryJobs(ctx context.Context, limit int) ([]Message, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao iniciar transacao de retry: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	rows, err := tx.Query(ctx, `
+		WITH due_jobs AS (
+			SELECT id, aluno_id
+			FROM insight_jobs
+			WHERE status = 'aguardando_retentativa'
+			  AND proxima_tentativa_em <= NOW()
+			ORDER BY proxima_tentativa_em ASC, atualizado_em ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE insight_jobs ij
+		SET status = 'pendente',
+		    proxima_tentativa_em = NULL,
+		    atualizado_em = NOW()
+		FROM due_jobs
+		WHERE ij.id = due_jobs.id
+		RETURNING ij.id::text, ij.aluno_id::text
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar jobs para retry: %w", err)
+	}
+	defer rows.Close()
+
+	messages := make([]Message, 0, limit)
+	for rows.Next() {
+		var message Message
+		if err := rows.Scan(&message.JobID, &message.AlunoID); err != nil {
+			return nil, fmt.Errorf("falha ao ler job para retry: %w", err)
+		}
+
+		messages = append(messages, message)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("falha ao iterar jobs para retry: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("falha ao confirmar jobs de retry: %w", err)
+	}
+
+	return messages, nil
+}

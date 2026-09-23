@@ -56,8 +56,9 @@ func main() {
 	logger.Info("PostgreSQL preparado com sucesso")
 
 	rabbitClient, err := rabbitmq.Connect(rabbitmq.Config{
-		URL:       cfg.RabbitMQURL,
-		QueueName: cfg.RabbitMQInsightsQueue,
+		URL:   cfg.RabbitMQURL,
+		Queue: cfg.RabbitMQInsightsQueue,
+		DLQ:   cfg.RabbitMQInsightsDLQ,
 	})
 	if err != nil {
 		logger.Error("falha ao preparar RabbitMQ", "erro", err)
@@ -72,6 +73,7 @@ func main() {
 	logger.Info(
 		"RabbitMQ preparado com sucesso",
 		"fila", rabbitClient.QueueName(),
+		"dlq", rabbitClient.DLQName(),
 		"prefetch", rabbitClient.PrefetchCount(),
 	)
 
@@ -84,7 +86,10 @@ func main() {
 	logger.Info("worker aguardando mensagens de insights")
 	insightsRepository := insights.NewRepository(postgresClient.Pool())
 	insightsService := insights.NewService(insightsRepository, aiClient, cfg.InsightMaxAttempts)
-	insightsConsumer := insights.NewConsumer(logger, insightsService)
+	retryScheduler := insights.NewRetryScheduler(logger, insightsRepository, rabbitClient, cfg.InsightRetryPoll, cfg.InsightRetryBatchSize)
+	go retryScheduler.Run(ctx)
+
+	insightsConsumer := insights.NewConsumer(logger, insightsService, rabbitClient)
 	insightsConsumer.Run(ctx, deliveries)
 	logger.Info("worker de insights finalizado")
 }

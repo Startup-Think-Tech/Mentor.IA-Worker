@@ -18,7 +18,9 @@ internal/
   insights/
     consumer.go
     message.go
+    prompt.go
     repository.go
+    retry_scheduler.go
     service.go
   platform/
     logger/
@@ -36,7 +38,7 @@ internal/
 - `cmd/insights-worker`: ponto de entrada do processo.
 - `internal/ai/openrouter`: cliente HTTP para OpenRouter Chat Completions.
 - `internal/config`: leitura e validação de variáveis de ambiente.
-- `internal/insights`: validação da mensagem, consumer, service e repository do processamento de insights.
+- `internal/insights`: validação da mensagem, consumer, prompt, scheduler de retry, service e repository do processamento de insights.
 - `internal/platform/logger`: configuração de logs estruturados.
 - `internal/platform/postgres`: conexão e pool PostgreSQL com `pgxpool`.
 - `internal/platform/rabbitmq`: conexão, canal, fila, prefetch e consumo técnico do RabbitMQ.
@@ -53,7 +55,7 @@ O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHT
 }
 ```
 
-Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas recebem `Nack` sem requeue, para evitar loop infinito com payload malformado. Falhas que conseguem ser persistidas no banco como `aguardando_retentativa` ou `falhou` também recebem `Ack`; falhas inesperadas de infraestrutura recebem `Nack` com requeue.
+Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas são publicadas na DLQ e confirmadas com `Ack`. Falhas que conseguem ser persistidas no banco como `aguardando_retentativa` ou `falhou` também recebem `Ack`; falhas inesperadas de infraestrutura recebem `Nack` com requeue.
 
 ## Processamento Atual
 
@@ -69,7 +71,16 @@ Ao receber uma mensagem válida, o worker:
 - Associa as disciplinas usadas em `insights_disciplinas`.
 - Marca o job como `concluido`.
 
-Se a geração ou persistência falhar, o worker atualiza o job para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou`.
+Se a geração ou persistência falhar, o worker atualiza o job para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou` e enviado para `RABBITMQ_INSIGHTS_DLQ`.
+
+## Retry E DLQ
+
+O scheduler interno busca periodicamente jobs com `status = aguardando_retentativa` e `proxima_tentativa_em <= NOW()`. Esses jobs são marcados como `pendente` e republicados na fila principal.
+
+A DLQ é uma fila separada declarada pelo worker. Ela recebe:
+
+- Payloads inválidos que não seguem o contrato `{ job_id, aluno_id }`.
+- Jobs que atingem falha definitiva após `INSIGHT_MAX_ATTEMPTS`.
 
 ## Variáveis De Ambiente
 
@@ -78,11 +89,14 @@ NODE_ENV="development"
 DATABASE_URL="postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 RABBITMQ_URL="amqp://mentor_ia:mentor_ia@localhost:5672"
 RABBITMQ_INSIGHTS_QUEUE="insights_queue"
+RABBITMQ_INSIGHTS_DLQ="insights_dlq"
 AI_PROVIDER="openrouter"
 AI_PROVIDER_API_KEY=""
 AI_MODEL="openrouter/free"
 AI_REQUEST_TIMEOUT_MS=60000
 INSIGHT_MAX_ATTEMPTS=3
+INSIGHT_RETRY_POLL_INTERVAL_MS=30000
+INSIGHT_RETRY_BATCH_SIZE=10
 ```
 
 ## Setup Local
@@ -109,6 +123,7 @@ Teste com PostgreSQL e RabbitMQ reais usando `.env`:
 go test ./internal/platform/postgres -run TestConnectWithEnv -v
 go test ./internal/platform/rabbitmq -run TestConnectWithEnv -v
 go test ./internal/insights -run TestRepositoryProcessesRealInsightResult -v
+go test ./internal/insights -run TestRepositoryClaimDueRetryJobs -v
 ```
 
 Para validar conexão real com RabbitMQ usando `RABBITMQ_URL` e `RABBITMQ_INSIGHTS_QUEUE` do `.env`:
