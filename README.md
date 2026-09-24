@@ -128,7 +128,7 @@ Fluxo atual:
 - Na mesma transação, marca o job como `pendente` e cria um evento em `outbox_eventos`.
 - O dispatcher faz claim curto de eventos `pending`, usando token e lock temporário, e confirma a transação antes de publicar.
 - Fora da transação PostgreSQL, ele publica no RabbitMQ com `mandatory=true`, publisher confirms e tratamento de retornos não roteáveis.
-- Cada publicação tem timeout próprio definido por `RABBITMQ_PUBLISH_TIMEOUT_MS`, que deve ser menor que `OUTBOX_LOCK_SECONDS`.
+- Cada publicação tem timeout próprio definido por `RABBITMQ_PUBLISH_TIMEOUT_MS`, iniciado após adquirir o mutex do publisher. `OUTBOX_BATCH_SIZE` e esse timeout devem deixar uma janela de publish dentro de `OUTBOX_LOCK_SECONDS`.
 - Após confirmação, marca o evento como `published`; em falhas, agenda novo retry com backoff. Eventos que excedem `OUTBOX_MAX_ATTEMPTS` ficam em `failed` e não bloqueiam os demais.
 
 O RabbitMQ usa uma conexão compartilhada com dois channels: um para `Consume`/`Ack`/`Nack` e outro para publicação/DLQ/publisher confirms. A política é fail-fast: queda inesperada da conexão encerra o processo com erro para reinício pelo orquestrador.
@@ -159,7 +159,7 @@ INSIGHT_MAX_ATTEMPTS=3
 INSIGHT_RETRY_POLL_INTERVAL_MS=30000
 INSIGHT_RETRY_BATCH_SIZE=10
 OUTBOX_POLL_INTERVAL_MS=5000
-OUTBOX_BATCH_SIZE=50
+OUTBOX_BATCH_SIZE=4
 OUTBOX_LOCK_SECONDS=30
 OUTBOX_MAX_ATTEMPTS=5
 ```

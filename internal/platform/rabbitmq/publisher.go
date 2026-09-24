@@ -58,11 +58,11 @@ func (c *Client) publishJSON(ctx context.Context, routingKey string, payload any
 }
 
 func (c *Client) publish(ctx context.Context, routingKey string, publishing amqp.Publishing) error {
-	publishCtx, cancel := context.WithTimeout(ctx, c.publishTimeout)
-	defer cancel()
-
 	c.publisherMu.Lock()
 	defer c.publisherMu.Unlock()
+
+	publishCtx, cancel := context.WithTimeout(ctx, c.publishTimeout)
+	defer cancel()
 
 	if err := c.publisherChannel.PublishWithContext(publishCtx, "", routingKey, true, false, publishing); err != nil {
 		return fmt.Errorf("falha ao publicar mensagem no RabbitMQ: %w", err)

@@ -25,6 +25,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("INSIGHT_RETRY_BATCH_SIZE", "")
 	t.Setenv("INSIGHT_RETRY_POLL_INTERVAL_MS", "")
 	t.Setenv("OUTBOX_LOCK_SECONDS", "")
+	t.Setenv("OUTBOX_BATCH_SIZE", "")
 	t.Setenv("OUTBOX_MAX_ATTEMPTS", "")
 
 	cfg, err := Load()
@@ -104,6 +105,17 @@ func TestLoadRejectsInvalidRabbitMQPublishTimeout(t *testing.T) {
 
 func TestLoadRejectsRabbitMQPublishTimeoutAtOrAboveOutboxLock(t *testing.T) {
 	t.Setenv("RABBITMQ_PUBLISH_TIMEOUT_MS", "30000")
+	t.Setenv("OUTBOX_LOCK_SECONDS", "30")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
+func TestLoadRejectsOutboxBatchWithoutPublishMargin(t *testing.T) {
+	t.Setenv("OUTBOX_BATCH_SIZE", "5")
+	t.Setenv("RABBITMQ_PUBLISH_TIMEOUT_MS", "5000")
 	t.Setenv("OUTBOX_LOCK_SECONDS", "30")
 
 	_, err := Load()

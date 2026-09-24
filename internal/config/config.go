@@ -16,7 +16,7 @@ const (
 	defaultDatabaseURL              = "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 	defaultInsightRetryBatchSize    = 10
 	defaultInsightRetryPollMS       = 30000
-	defaultOutboxBatchSize          = 50
+	defaultOutboxBatchSize          = 4
 	defaultOutboxPollMS             = 5000
 	defaultOutboxLockSeconds        = 30
 	defaultOutboxMaxAttempts        = 5
@@ -175,6 +175,9 @@ func Load() (Config, error) {
 	outboxLock := time.Duration(outboxLockSeconds) * time.Second
 	if publishTimeout >= outboxLock {
 		return Config{}, fmt.Errorf("RABBITMQ_PUBLISH_TIMEOUT_MS must be less than OUTBOX_LOCK_SECONDS")
+	}
+	if time.Duration(outboxBatchSize+1)*publishTimeout >= outboxLock {
+		return Config{}, fmt.Errorf("OUTBOX_BATCH_SIZE and RABBITMQ_PUBLISH_TIMEOUT_MS must leave a publish timeout margin within OUTBOX_LOCK_SECONDS")
 	}
 
 	if outboxMaxAttempts <= 0 {
