@@ -1,10 +1,14 @@
 package rabbitmq
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/testsupport"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func TestConnectRejectsEmptyURL(t *testing.T) {
@@ -25,6 +29,28 @@ func TestConnectRejectsEmptyDLQ(t *testing.T) {
 	_, err := Connect(Config{URL: "amqp://usuario:senha@rabbitmq.example.com:5672", Queue: "insights_queue"})
 	if err == nil {
 		t.Fatal("Connect() returned nil error")
+	}
+}
+
+func TestConnectRejectsNegativePublishTimeout(t *testing.T) {
+	_, err := Connect(Config{
+		URL:            "amqp://usuario:senha@rabbitmq.example.com:5672",
+		Queue:          "insights_queue",
+		DLQ:            "insights_dlq",
+		PublishTimeout: -time.Second,
+	})
+	if err == nil {
+		t.Fatal("Connect() returned nil error")
+	}
+}
+
+func TestWaitForPublishReturnsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	err := waitForPublish(ctx, make(chan amqp.Confirmation), make(chan amqp.Return))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitForPublish() error = %v, want context deadline exceeded", err)
 	}
 }
 

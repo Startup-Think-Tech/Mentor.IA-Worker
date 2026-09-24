@@ -124,7 +124,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 				c.logger.Error("falha ao enviar mensagem invalida para DLQ", "erro", dlqErr)
 			}
 		}
-		if nackErr := delivery.Nack(false, false); nackErr != nil {
+		if nackErr := delivery.Nack(false, true); nackErr != nil {
 			c.logger.Error("falha ao rejeitar mensagem de insight", "erro", nackErr)
 		}
 		return
@@ -143,22 +143,8 @@ func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 				"job_id", message.JobID,
 				"erro", err,
 			)
-			if c.deadLetterPublisher != nil {
-				if dlqErr := c.deadLetterPublisher.PublishToDLQ(ctx, map[string]string{
-					"job_id":   message.JobID,
-					"aluno_id": message.AlunoID,
-					"erro":     err.Error(),
-				}); dlqErr != nil {
-					c.logger.Error("falha ao enviar job falho para DLQ", "job_id", message.JobID, "erro", dlqErr)
-					if nackErr := delivery.Nack(false, true); nackErr != nil {
-						c.logger.Error("falha ao reenfileirar mensagem apos erro de DLQ", "erro", nackErr)
-					}
-					return
-				}
-			}
-
 			if ackErr := delivery.Ack(false); ackErr != nil {
-				c.logger.Error("falha ao confirmar mensagem com erro persistido", "erro", ackErr)
+				c.logger.Error("falha ao confirmar mensagem com erro persistido na outbox", "erro", ackErr)
 			}
 			return
 		}

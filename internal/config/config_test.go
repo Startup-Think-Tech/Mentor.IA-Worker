@@ -14,6 +14,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("RABBITMQ_INSIGHTS_DLQ", "")
 	t.Setenv("RABBITMQ_INSIGHTS_QUEUE", "")
 	t.Setenv("RABBITMQ_PREFETCH", "")
+	t.Setenv("RABBITMQ_PUBLISH_TIMEOUT_MS", "")
 	t.Setenv("WORKER_CONCURRENCY", "")
 	t.Setenv("AI_PROVIDER", "")
 	t.Setenv("AI_PROVIDER_API_KEY", "")
@@ -45,6 +46,10 @@ func TestLoadUsesDefaults(t *testing.T) {
 
 	if cfg.InsightLease != defaultInsightLeaseSeconds*time.Second {
 		t.Fatalf("InsightLease = %s, want %s", cfg.InsightLease, defaultInsightLeaseSeconds*time.Second)
+	}
+
+	if cfg.RabbitMQPublishTimeout != defaultRabbitMQPublishTimeoutMS*time.Millisecond {
+		t.Fatalf("RabbitMQPublishTimeout = %s, want %s", cfg.RabbitMQPublishTimeout, defaultRabbitMQPublishTimeoutMS*time.Millisecond)
 	}
 
 	if cfg.RabbitMQInsightsDLQ != defaultRabbitMQInsightsDLQ {
@@ -81,6 +86,45 @@ func TestLoadRejectsMissingProductionConfiguration(t *testing.T) {
 func TestLoadRejectsPrefetchBelowConcurrency(t *testing.T) {
 	t.Setenv("WORKER_CONCURRENCY", "2")
 	t.Setenv("RABBITMQ_PREFETCH", "1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
+func TestLoadRejectsInvalidRabbitMQPublishTimeout(t *testing.T) {
+	t.Setenv("RABBITMQ_PUBLISH_TIMEOUT_MS", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
+func TestLoadRejectsRabbitMQPublishTimeoutAtOrAboveOutboxLock(t *testing.T) {
+	t.Setenv("RABBITMQ_PUBLISH_TIMEOUT_MS", "30000")
+	t.Setenv("OUTBOX_LOCK_SECONDS", "30")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
+func TestLoadAcceptsInsightLeaseWithMinimumMargin(t *testing.T) {
+	t.Setenv("AI_REQUEST_TIMEOUT_MS", "60000")
+	t.Setenv("INSIGHT_PROCESSING_LEASE_SECONDS", "90")
+
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+}
+
+func TestLoadRejectsInsightLeaseBelowMinimumMargin(t *testing.T) {
+	t.Setenv("AI_REQUEST_TIMEOUT_MS", "60000")
+	t.Setenv("INSIGHT_PROCESSING_LEASE_SECONDS", "89")
 
 	_, err := Load()
 	if err == nil {

@@ -58,21 +58,28 @@ func (c *Client) publishJSON(ctx context.Context, routingKey string, payload any
 }
 
 func (c *Client) publish(ctx context.Context, routingKey string, publishing amqp.Publishing) error {
+	publishCtx, cancel := context.WithTimeout(ctx, c.publishTimeout)
+	defer cancel()
+
 	c.publisherMu.Lock()
 	defer c.publisherMu.Unlock()
 
-	if err := c.publisherChannel.PublishWithContext(ctx, "", routingKey, true, false, publishing); err != nil {
+	if err := c.publisherChannel.PublishWithContext(publishCtx, "", routingKey, true, false, publishing); err != nil {
 		return fmt.Errorf("falha ao publicar mensagem no RabbitMQ: %w", err)
 	}
 
+	return waitForPublish(publishCtx, c.confirms, c.returns)
+}
+
+func waitForPublish(ctx context.Context, confirms <-chan amqp.Confirmation, returns <-chan amqp.Return) error {
 	for {
 		select {
-		case returned, ok := <-c.returns:
+		case returned, ok := <-returns:
 			if !ok {
 				return fmt.Errorf("canal de retorno do RabbitMQ fechado")
 			}
 			return fmt.Errorf("mensagem nao roteavel no RabbitMQ: codigo=%d texto=%s", returned.ReplyCode, returned.ReplyText)
-		case confirmation, ok := <-c.confirms:
+		case confirmation, ok := <-confirms:
 			if !ok {
 				return fmt.Errorf("canal de confirmacao do RabbitMQ fechado")
 			}
@@ -81,7 +88,7 @@ func (c *Client) publish(ctx context.Context, routingKey string, publishing amqp
 			}
 
 			select {
-			case returned := <-c.returns:
+			case returned := <-returns:
 				return fmt.Errorf("mensagem nao roteavel no RabbitMQ: codigo=%d texto=%s", returned.ReplyCode, returned.ReplyText)
 			default:
 				return nil

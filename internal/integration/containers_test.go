@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -215,6 +216,39 @@ func TestRepositoryReliabilityWithPostgresContainer(t *testing.T) {
 
 	if _, err := repository.RegisterFailure(ctx, firstLease, 3, "AI_COMPLETION_FAILED", errors.New("stale worker")); !errors.Is(err, domain.ErrProcessingLeaseLost) {
 		t.Fatalf("RegisterFailure() error = %v, want ErrProcessingLeaseLost", err)
+	}
+
+	action, err := repository.RegisterFailure(ctx, secondLease, 1, "AI_COMPLETION_FAILED", errors.New("invalid API key"))
+	if err != nil {
+		t.Fatalf("RegisterFailure() returned error: %v", err)
+	}
+	if action != domain.FailureActionFailed {
+		t.Fatalf("action = %q, want %q", action, domain.FailureActionFailed)
+	}
+
+	var jobStatus string
+	if err := client.Pool().QueryRow(ctx, `SELECT status::text FROM insight_jobs WHERE id = $1`, jobID).Scan(&jobStatus); err != nil {
+		t.Fatalf("select job status returned error: %v", err)
+	}
+	if jobStatus != "falhou" {
+		t.Fatalf("job status = %q, want falhou", jobStatus)
+	}
+
+	var failedPayload []byte
+	if err := client.Pool().QueryRow(ctx, `
+		SELECT payload
+		FROM outbox_eventos
+		WHERE job_id = $1 AND tipo = $2
+	`, jobID, domain.OutboxTypeInsightFailed).Scan(&failedPayload); err != nil {
+		t.Fatalf("select failure outbox event returned error: %v", err)
+	}
+
+	var failedEvent domain.InsightFailedEvent
+	if err := json.Unmarshal(failedPayload, &failedEvent); err != nil {
+		t.Fatalf("decode failure outbox payload returned error: %v", err)
+	}
+	if failedEvent.JobID != jobID.String() || failedEvent.AlunoID != alunoID.String() || failedEvent.ErrorCode != "AI_COMPLETION_FAILED" {
+		t.Fatalf("failure payload = %#v", failedEvent)
 	}
 
 	eventID := uuid.New()

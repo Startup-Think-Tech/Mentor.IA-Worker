@@ -182,8 +182,16 @@ func (r *Repository) RegisterFailure(ctx context.Context, lease domain.Processin
 		summary = summary[:500]
 	}
 
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("falha ao iniciar transacao para registrar erro do job de insight: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
 	var status string
-	err := r.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE insight_jobs
 		SET status = CASE
 		      WHEN tentativas >= $3 THEN 'falhou'::"InsightJobStatus"
@@ -210,6 +218,29 @@ func (r *Repository) RegisterFailure(ctx context.Context, lease domain.Processin
 		}
 
 		return "", fmt.Errorf("falha ao registrar erro do job de insight: %w", err)
+	}
+
+	if status == "falhou" {
+		payload, err := json.Marshal(domain.InsightFailedEvent{
+			JobID:        lease.Message.JobID,
+			AlunoID:      lease.Message.AlunoID,
+			ErrorCode:    code,
+			ErrorSummary: summary,
+		})
+		if err != nil {
+			return "", fmt.Errorf("falha ao serializar evento de falha definitiva: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO outbox_eventos (id, job_id, tipo, payload)
+			VALUES ($1, $2, $3, $4)
+		`, uuid.NewString(), lease.Message.JobID, domain.OutboxTypeInsightFailed, payload); err != nil {
+			return "", fmt.Errorf("falha ao criar evento de outbox para falha definitiva: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("falha ao confirmar erro do job de insight: %w", err)
 	}
 
 	if status == "falhou" {

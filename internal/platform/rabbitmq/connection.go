@@ -4,18 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 const defaultPrefetchCount = 1
+const defaultPublishTimeout = 5 * time.Second
 
 type Config struct {
-	URL       string
-	Queue     string
-	DLQ       string
-	QueueName string
-	Prefetch  int
+	URL            string
+	Queue          string
+	DLQ            string
+	QueueName      string
+	Prefetch       int
+	PublishTimeout time.Duration
 }
 
 type Client struct {
@@ -29,6 +32,7 @@ type Client struct {
 	queue            amqp.Queue
 	dlq              amqp.Queue
 	prefetch         int
+	publishTimeout   time.Duration
 }
 
 func Connect(config Config) (*Client, error) {
@@ -54,6 +58,12 @@ func Connect(config Config) (*Client, error) {
 	if config.Prefetch < 0 {
 		return nil, fmt.Errorf("RABBITMQ_PREFETCH deve ser maior que zero")
 	}
+	if config.PublishTimeout == 0 {
+		config.PublishTimeout = defaultPublishTimeout
+	}
+	if config.PublishTimeout < 0 {
+		return nil, fmt.Errorf("RABBITMQ_PUBLISH_TIMEOUT_MS deve ser maior que zero")
+	}
 
 	connection, err := amqp.Dial(config.URL)
 	if err != nil {
@@ -64,6 +74,7 @@ func Connect(config Config) (*Client, error) {
 		connection:       connection,
 		connectionErrors: connection.NotifyClose(make(chan *amqp.Error, 1)),
 		prefetch:         config.Prefetch,
+		publishTimeout:   config.PublishTimeout,
 	}
 
 	if err := client.declareTopology(config.Queue, config.DLQ); err != nil {

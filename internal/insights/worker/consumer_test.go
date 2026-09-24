@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,7 +87,7 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 	}
 }
 
-func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
+func TestConsumerAcksInvalidMessageAfterDLQPublish(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`invalid`)}
 	dlqPublisher := &fakeDeadLetterPublisher{}
 	consumer := NewConsumer(
@@ -108,6 +109,26 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 
 	if len(dlqPublisher.rawMessages) != 1 {
 		t.Fatalf("raw DLQ messages = %d, want 1", len(dlqPublisher.rawMessages))
+	}
+}
+
+func TestConsumerRequeuesInvalidMessageWhenDLQPublishFails(t *testing.T) {
+	delivery := &fakeDelivery{body: []byte(`invalid`)}
+	consumer := NewConsumer(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&fakeProcessor{},
+		&fakeDeadLetterPublisher{err: errors.New("DLQ unavailable")},
+		1,
+	)
+
+	consumer.handleDelivery(context.Background(), delivery)
+
+	if delivery.acked {
+		t.Fatal("invalid delivery with DLQ failure was acked")
+	}
+
+	if !delivery.nacked || !delivery.requeueOnNack {
+		t.Fatal("invalid delivery with DLQ failure should be requeued")
 	}
 }
 
@@ -155,7 +176,7 @@ func TestConsumerAcksRetryScheduledError(t *testing.T) {
 	}
 }
 
-func TestConsumerPublishesFinalFailureToDLQ(t *testing.T) {
+func TestConsumerAcksFinalFailurePersistedInOutbox(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	dlqPublisher := &fakeDeadLetterPublisher{}
 	consumer := NewConsumer(
@@ -171,8 +192,8 @@ func TestConsumerPublishesFinalFailureToDLQ(t *testing.T) {
 		t.Fatal("final failed delivery was not acked")
 	}
 
-	if len(dlqPublisher.jsonMessages) != 1 {
-		t.Fatalf("json DLQ messages = %d, want 1", len(dlqPublisher.jsonMessages))
+	if len(dlqPublisher.jsonMessages) != 0 {
+		t.Fatalf("json DLQ messages = %d, want 0", len(dlqPublisher.jsonMessages))
 	}
 }
 

@@ -29,7 +29,17 @@ const (
 	FailureActionRetry  FailureAction = "retry"
 )
 
-const OutboxTypeInsightRetryRequested = "insight.retry.requested"
+const (
+	OutboxTypeInsightFailed         = "insight.failed"
+	OutboxTypeInsightRetryRequested = "insight.retry.requested"
+)
+
+type InsightFailedEvent struct {
+	JobID        string `json:"job_id"`
+	AlunoID      string `json:"aluno_id"`
+	ErrorCode    string `json:"error_code"`
+	ErrorSummary string `json:"error_summary"`
+}
 
 type OutboxEvent struct {
 	ID              string

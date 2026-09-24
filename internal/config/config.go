@@ -12,46 +12,49 @@ import (
 )
 
 const (
-	defaultAppEnv                = "development"
-	defaultDatabaseURL           = "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
-	defaultInsightRetryBatchSize = 10
-	defaultInsightRetryPollMS    = 30000
-	defaultOutboxBatchSize       = 50
-	defaultOutboxPollMS          = 5000
-	defaultOutboxLockSeconds     = 30
-	defaultOutboxMaxAttempts     = 5
-	defaultRabbitMQURL           = "amqp://mentor_ia:mentor_ia@localhost:5672"
-	defaultRabbitMQInsightsDLQ   = "insights_dlq"
-	defaultRabbitMQInsightsQueue = "insights_queue"
-	defaultAIProvider            = "openrouter"
-	defaultAIModel               = "openrouter/free"
-	defaultAIRequestTimeoutMS    = 60000
-	defaultInsightLeaseSeconds   = 120
-	defaultInsightMaxAttempts    = 3
-	defaultWorkerConcurrency     = 1
+	defaultAppEnv                   = "development"
+	defaultDatabaseURL              = "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
+	defaultInsightRetryBatchSize    = 10
+	defaultInsightRetryPollMS       = 30000
+	defaultOutboxBatchSize          = 50
+	defaultOutboxPollMS             = 5000
+	defaultOutboxLockSeconds        = 30
+	defaultOutboxMaxAttempts        = 5
+	defaultRabbitMQURL              = "amqp://mentor_ia:mentor_ia@localhost:5672"
+	defaultRabbitMQInsightsDLQ      = "insights_dlq"
+	defaultRabbitMQInsightsQueue    = "insights_queue"
+	defaultRabbitMQPublishTimeoutMS = 5000
+	defaultAIProvider               = "openrouter"
+	defaultAIModel                  = "openrouter/free"
+	defaultAIRequestTimeoutMS       = 60000
+	defaultInsightLeaseSeconds      = 120
+	defaultInsightMaxAttempts       = 3
+	defaultWorkerConcurrency        = 1
+	minInsightLeaseMargin           = 30 * time.Second
 )
 
 type Config struct {
-	AppEnv                string
-	DatabaseURL           string
-	InsightRetryBatchSize int
-	InsightRetryPoll      time.Duration
-	OutboxBatchSize       int
-	OutboxPoll            time.Duration
-	OutboxLock            time.Duration
-	OutboxMaxAttempts     int
-	RabbitMQURL           string
-	RabbitMQInsightsDLQ   string
-	RabbitMQInsightsQueue string
-	RabbitMQPrefetch      int
-	WorkerConcurrency     int
-	AIProvider            string
-	AIProviderAPIKey      string
-	AIProviderBaseURL     string
-	AIModel               string
-	AIRequestTimeout      time.Duration
-	InsightLease          time.Duration
-	InsightMaxAttempts    int
+	AppEnv                 string
+	DatabaseURL            string
+	InsightRetryBatchSize  int
+	InsightRetryPoll       time.Duration
+	OutboxBatchSize        int
+	OutboxPoll             time.Duration
+	OutboxLock             time.Duration
+	OutboxMaxAttempts      int
+	RabbitMQURL            string
+	RabbitMQInsightsDLQ    string
+	RabbitMQInsightsQueue  string
+	RabbitMQPrefetch       int
+	RabbitMQPublishTimeout time.Duration
+	WorkerConcurrency      int
+	AIProvider             string
+	AIProviderAPIKey       string
+	AIProviderBaseURL      string
+	AIModel                string
+	AIRequestTimeout       time.Duration
+	InsightLease           time.Duration
+	InsightMaxAttempts     int
 }
 
 func Load() (Config, error) {
@@ -79,6 +82,11 @@ func Load() (Config, error) {
 	}
 
 	rabbitMQPrefetch, err := getEnvInt("RABBITMQ_PREFETCH", workerConcurrency)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rabbitMQPublishTimeoutMS, err := getEnvInt("RABBITMQ_PUBLISH_TIMEOUT_MS", defaultRabbitMQPublishTimeoutMS)
 	if err != nil {
 		return Config{}, err
 	}
@@ -133,10 +141,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("RABBITMQ_PREFETCH must be greater than or equal to WORKER_CONCURRENCY")
 	}
 
+	if rabbitMQPublishTimeoutMS <= 0 {
+		return Config{}, fmt.Errorf("RABBITMQ_PUBLISH_TIMEOUT_MS must be greater than zero")
+	}
+
 	leaseDuration := time.Duration(leaseSeconds) * time.Second
 	requestTimeout := time.Duration(requestTimeoutMS) * time.Millisecond
-	if leaseDuration <= requestTimeout {
-		return Config{}, fmt.Errorf("INSIGHT_PROCESSING_LEASE_SECONDS must be greater than AI_REQUEST_TIMEOUT_MS")
+	if leaseDuration < requestTimeout+minInsightLeaseMargin {
+		return Config{}, fmt.Errorf("INSIGHT_PROCESSING_LEASE_SECONDS must be at least 30 seconds greater than AI_REQUEST_TIMEOUT_MS")
 	}
 
 	if retryPollMS <= 0 {
@@ -159,6 +171,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("OUTBOX_LOCK_SECONDS must be greater than zero")
 	}
 
+	publishTimeout := time.Duration(rabbitMQPublishTimeoutMS) * time.Millisecond
+	outboxLock := time.Duration(outboxLockSeconds) * time.Second
+	if publishTimeout >= outboxLock {
+		return Config{}, fmt.Errorf("RABBITMQ_PUBLISH_TIMEOUT_MS must be less than OUTBOX_LOCK_SECONDS")
+	}
+
 	if outboxMaxAttempts <= 0 {
 		return Config{}, fmt.Errorf("OUTBOX_MAX_ATTEMPTS must be greater than zero")
 	}
@@ -172,26 +190,27 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		AppEnv:                appEnv,
-		DatabaseURL:           getEnvString("DATABASE_URL", defaultDatabaseURL),
-		InsightRetryBatchSize: retryBatchSize,
-		InsightRetryPoll:      time.Duration(retryPollMS) * time.Millisecond,
-		OutboxBatchSize:       outboxBatchSize,
-		OutboxPoll:            time.Duration(outboxPollMS) * time.Millisecond,
-		OutboxLock:            time.Duration(outboxLockSeconds) * time.Second,
-		OutboxMaxAttempts:     outboxMaxAttempts,
-		RabbitMQURL:           getEnvString("RABBITMQ_URL", defaultRabbitMQURL),
-		RabbitMQInsightsDLQ:   getEnvString("RABBITMQ_INSIGHTS_DLQ", defaultRabbitMQInsightsDLQ),
-		RabbitMQInsightsQueue: getEnvString("RABBITMQ_INSIGHTS_QUEUE", defaultRabbitMQInsightsQueue),
-		RabbitMQPrefetch:      rabbitMQPrefetch,
-		WorkerConcurrency:     workerConcurrency,
-		AIProvider:            getEnvString("AI_PROVIDER", defaultAIProvider),
-		AIProviderAPIKey:      strings.TrimSpace(os.Getenv("AI_PROVIDER_API_KEY")),
-		AIProviderBaseURL:     strings.TrimSpace(os.Getenv("AI_PROVIDER_BASE_URL")),
-		AIModel:               getEnvString("AI_MODEL", defaultAIModel),
-		AIRequestTimeout:      requestTimeout,
-		InsightLease:          leaseDuration,
-		InsightMaxAttempts:    maxAttempts,
+		AppEnv:                 appEnv,
+		DatabaseURL:            getEnvString("DATABASE_URL", defaultDatabaseURL),
+		InsightRetryBatchSize:  retryBatchSize,
+		InsightRetryPoll:       time.Duration(retryPollMS) * time.Millisecond,
+		OutboxBatchSize:        outboxBatchSize,
+		OutboxPoll:             time.Duration(outboxPollMS) * time.Millisecond,
+		OutboxLock:             outboxLock,
+		OutboxMaxAttempts:      outboxMaxAttempts,
+		RabbitMQURL:            getEnvString("RABBITMQ_URL", defaultRabbitMQURL),
+		RabbitMQInsightsDLQ:    getEnvString("RABBITMQ_INSIGHTS_DLQ", defaultRabbitMQInsightsDLQ),
+		RabbitMQInsightsQueue:  getEnvString("RABBITMQ_INSIGHTS_QUEUE", defaultRabbitMQInsightsQueue),
+		RabbitMQPrefetch:       rabbitMQPrefetch,
+		RabbitMQPublishTimeout: publishTimeout,
+		WorkerConcurrency:      workerConcurrency,
+		AIProvider:             getEnvString("AI_PROVIDER", defaultAIProvider),
+		AIProviderAPIKey:       strings.TrimSpace(os.Getenv("AI_PROVIDER_API_KEY")),
+		AIProviderBaseURL:      strings.TrimSpace(os.Getenv("AI_PROVIDER_BASE_URL")),
+		AIModel:                getEnvString("AI_MODEL", defaultAIModel),
+		AIRequestTimeout:       requestTimeout,
+		InsightLease:           leaseDuration,
+		InsightMaxAttempts:     maxAttempts,
 	}, nil
 }
 
@@ -209,6 +228,7 @@ func (c Config) LogAttrs() []any {
 		slog.String("rabbitmq_insights_dlq", c.RabbitMQInsightsDLQ),
 		slog.String("rabbitmq_insights_queue", c.RabbitMQInsightsQueue),
 		slog.Int("rabbitmq_prefetch", c.RabbitMQPrefetch),
+		slog.Duration("rabbitmq_publish_timeout", c.RabbitMQPublishTimeout),
 		slog.Int("worker_concurrency", c.WorkerConcurrency),
 		slog.String("ai_provider", c.AIProvider),
 		slog.String("ai_model", c.AIModel),

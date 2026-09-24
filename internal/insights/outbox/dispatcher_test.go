@@ -32,8 +32,9 @@ func (s *fakeStore) MarkOutboxEventFailed(_ context.Context, event domain.Outbox
 }
 
 type fakePublisher struct {
-	failJobID string
-	published []string
+	failJobID    string
+	published    []string
+	dlqPublished []domain.InsightFailedEvent
 }
 
 func (p *fakePublisher) PublishInsightMessage(_ context.Context, payload any) error {
@@ -43,6 +44,12 @@ func (p *fakePublisher) PublishInsightMessage(_ context.Context, payload any) er
 	}
 
 	p.published = append(p.published, message.JobID)
+	return nil
+}
+
+func (p *fakePublisher) PublishToDLQ(_ context.Context, payload any) error {
+	failure := payload.(domain.InsightFailedEvent)
+	p.dlqPublished = append(p.dlqPublished, failure)
 	return nil
 }
 
@@ -70,5 +77,40 @@ func TestDispatcherContinuesAfterPoisonEvent(t *testing.T) {
 
 	if len(store.published) != 1 || store.published[0] != "event-2" {
 		t.Fatalf("published events = %#v, want event-2", store.published)
+	}
+}
+
+func TestDispatcherPublishesFinalFailureToDLQ(t *testing.T) {
+	store := &fakeStore{events: []domain.OutboxEvent{
+		{
+			ID:       "event-1",
+			Type:     domain.OutboxTypeInsightFailed,
+			Payload:  []byte(`{"job_id":"job-1","aluno_id":"aluno-1","error_code":"AI_COMPLETION_FAILED","error_summary":"unauthorized"}`),
+			Attempts: 1,
+		},
+	}}
+	publisher := &fakePublisher{}
+	dispatcher := NewDispatcher(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		store,
+		publisher,
+		time.Second,
+		1,
+		time.Second,
+		3,
+	)
+
+	dispatcher.dispatch(context.Background())
+
+	if len(publisher.dlqPublished) != 1 {
+		t.Fatalf("DLQ messages = %d, want 1", len(publisher.dlqPublished))
+	}
+
+	if publisher.dlqPublished[0].ErrorCode != "AI_COMPLETION_FAILED" {
+		t.Fatalf("ErrorCode = %q, want AI_COMPLETION_FAILED", publisher.dlqPublished[0].ErrorCode)
+	}
+
+	if len(store.published) != 1 || store.published[0] != "event-1" {
+		t.Fatalf("published events = %#v, want event-1", store.published)
 	}
 }

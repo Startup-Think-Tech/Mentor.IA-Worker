@@ -68,10 +68,11 @@ func run(ctx context.Context) error {
 	logger.Info("PostgreSQL preparado com sucesso")
 
 	rabbitClient, err := rabbitmq.Connect(rabbitmq.Config{
-		URL:      cfg.RabbitMQURL,
-		Queue:    cfg.RabbitMQInsightsQueue,
-		DLQ:      cfg.RabbitMQInsightsDLQ,
-		Prefetch: cfg.RabbitMQPrefetch,
+		URL:            cfg.RabbitMQURL,
+		Queue:          cfg.RabbitMQInsightsQueue,
+		DLQ:            cfg.RabbitMQInsightsDLQ,
+		Prefetch:       cfg.RabbitMQPrefetch,
+		PublishTimeout: cfg.RabbitMQPublishTimeout,
 	})
 	if err != nil {
 		logger.Error("falha ao preparar RabbitMQ", "erro", err)

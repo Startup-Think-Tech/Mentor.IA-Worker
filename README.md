@@ -93,7 +93,7 @@ O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHT
 }
 ```
 
-Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas são publicadas na DLQ e confirmadas com `Ack`. Falhas persistidas no banco como retry ou falha definitiva também recebem `Ack`. Falhas inesperadas de infraestrutura recebem `Nack` com requeue.
+Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas são publicadas na DLQ e confirmadas com `Ack`; se essa publicação falhar, recebem `Nack` com requeue. Falhas persistidas no banco como retry ou falha definitiva também recebem `Ack`. Falhas inesperadas de infraestrutura recebem `Nack` com requeue.
 
 O consumer usa worker pool limitado por `WORKER_CONCURRENCY`. `RABBITMQ_PREFETCH` deve ser maior ou igual à concorrência para manter backpressure coerente.
 
@@ -112,9 +112,11 @@ Ao receber uma mensagem válida, o worker:
 
 O `processing_token` protege contra stale workers. Se um worker perder o lease e outro worker readquirir o job, o worker antigo não consegue salvar resultado nem registrar falha usando o token anterior.
 
+`INSIGHT_PROCESSING_LEASE_SECONDS` deve ser pelo menos 30 segundos maior que `AI_REQUEST_TIMEOUT_MS`, evitando que o lease expire durante uma chamada de IA ainda em curso.
+
 Erros de rede, timeout, `429` e `5xx` do provedor de IA geram retry. Erros permanentes, como `400`, `401` e `403`, falham definitivamente sem gastar tentativas adicionais.
 
-Se a geração ou persistência falhar de forma retryável, o job é atualizado para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou` e enviado para `RABBITMQ_INSIGHTS_DLQ`.
+Se a geração ou persistência falhar de forma retryável, o job é atualizado para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou` e cria, na mesma transação, um evento `insight.failed` para envio posterior à `RABBITMQ_INSIGHTS_DLQ`.
 
 ## Retry, Outbox E DLQ
 
@@ -126,6 +128,7 @@ Fluxo atual:
 - Na mesma transação, marca o job como `pendente` e cria um evento em `outbox_eventos`.
 - O dispatcher faz claim curto de eventos `pending`, usando token e lock temporário, e confirma a transação antes de publicar.
 - Fora da transação PostgreSQL, ele publica no RabbitMQ com `mandatory=true`, publisher confirms e tratamento de retornos não roteáveis.
+- Cada publicação tem timeout próprio definido por `RABBITMQ_PUBLISH_TIMEOUT_MS`, que deve ser menor que `OUTBOX_LOCK_SECONDS`.
 - Após confirmação, marca o evento como `published`; em falhas, agenda novo retry com backoff. Eventos que excedem `OUTBOX_MAX_ATTEMPTS` ficam em `failed` e não bloqueiam os demais.
 
 O RabbitMQ usa uma conexão compartilhada com dois channels: um para `Consume`/`Ack`/`Nack` e outro para publicação/DLQ/publisher confirms. A política é fail-fast: queda inesperada da conexão encerra o processo com erro para reinício pelo orquestrador.
@@ -145,6 +148,7 @@ RABBITMQ_INSIGHTS_QUEUE="insights_queue"
 RABBITMQ_INSIGHTS_DLQ="insights_dlq"
 WORKER_CONCURRENCY=1
 RABBITMQ_PREFETCH=1
+RABBITMQ_PUBLISH_TIMEOUT_MS=5000
 AI_PROVIDER="openrouter"
 AI_PROVIDER_API_KEY=""
 AI_PROVIDER_BASE_URL=""

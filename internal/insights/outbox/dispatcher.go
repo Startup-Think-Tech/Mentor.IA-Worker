@@ -18,6 +18,7 @@ type Store interface {
 
 type MessagePublisher interface {
 	PublishInsightMessage(ctx context.Context, payload any) error
+	PublishToDLQ(ctx context.Context, payload any) error
 }
 
 type Dispatcher struct {
@@ -106,6 +107,13 @@ func (d *Dispatcher) publish(ctx context.Context, event domain.OutboxEvent) erro
 		}
 
 		return d.publisher.PublishInsightMessage(ctx, message)
+	case domain.OutboxTypeInsightFailed:
+		var failure domain.InsightFailedEvent
+		if err := json.Unmarshal(event.Payload, &failure); err != nil {
+			return fmt.Errorf("payload de falha definitiva invalido: %w", err)
+		}
+
+		return d.publisher.PublishToDLQ(ctx, failure)
 	default:
 		return fmt.Errorf("tipo de evento de outbox desconhecido: %s", event.Type)
 	}
