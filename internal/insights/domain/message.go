@@ -1,4 +1,4 @@
-package insights
+package domain
 
 import (
 	"encoding/json"

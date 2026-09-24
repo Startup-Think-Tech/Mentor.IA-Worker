@@ -1,11 +1,14 @@
-package insights
+package worker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
 
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/daviPeter07/ai-worker/internal/insights/service"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -14,6 +17,14 @@ type fakeDelivery struct {
 	acked         bool
 	nacked        bool
 	requeueOnNack bool
+}
+
+type fakeProcessor struct {
+	err error
+}
+
+func (p *fakeProcessor) Process(context.Context, domain.Message) error {
+	return p.err
 }
 
 type fakeDeadLetterPublisher struct {
@@ -59,7 +70,7 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeProcessor{},
 		&fakeDeadLetterPublisher{},
 	)
 
@@ -79,7 +90,7 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 	dlqPublisher := &fakeDeadLetterPublisher{}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeProcessor{},
 		dlqPublisher,
 	)
 
@@ -102,7 +113,7 @@ func TestConsumerNacksUnexpectedProcessingErrorWithRequeue(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{beginErr: context.Canceled}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeProcessor{err: context.Canceled},
 		&fakeDeadLetterPublisher{},
 	)
 
@@ -125,7 +136,7 @@ func TestConsumerAcksRetryScheduledError(t *testing.T) {
 	delivery := &fakeDelivery{body: []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`)}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{failureAction: FailureActionRetry}, &fakeAIClient{err: context.Canceled}, 3),
+		&fakeProcessor{err: fmt.Errorf("%w: failed", service.ErrRetryScheduled)},
 		&fakeDeadLetterPublisher{},
 	)
 
@@ -145,7 +156,7 @@ func TestConsumerPublishesFinalFailureToDLQ(t *testing.T) {
 	dlqPublisher := &fakeDeadLetterPublisher{}
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{failureAction: FailureActionFailed}, &fakeAIClient{err: context.Canceled}, 3),
+		&fakeProcessor{err: fmt.Errorf("%w: failed", service.ErrJobFailed)},
 		dlqPublisher,
 	)
 
@@ -167,7 +178,7 @@ func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 	deliveries := make(chan amqp.Delivery)
 	consumer := NewConsumer(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		NewService(&fakeStore{}, &fakeAIClient{content: "Insight real"}, 3),
+		&fakeProcessor{},
 		&fakeDeadLetterPublisher{},
 	)
 	consumer.Run(ctx, deliveries)

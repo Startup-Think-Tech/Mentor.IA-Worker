@@ -16,6 +16,8 @@ const (
 	defaultDatabaseURL           = "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 	defaultInsightRetryBatchSize = 10
 	defaultInsightRetryPollMS    = 30000
+	defaultOutboxBatchSize       = 50
+	defaultOutboxPollMS          = 5000
 	defaultRabbitMQURL           = "amqp://mentor_ia:mentor_ia@localhost:5672"
 	defaultRabbitMQInsightsDLQ   = "insights_dlq"
 	defaultRabbitMQInsightsQueue = "insights_queue"
@@ -30,11 +32,14 @@ type Config struct {
 	DatabaseURL           string
 	InsightRetryBatchSize int
 	InsightRetryPoll      time.Duration
+	OutboxBatchSize       int
+	OutboxPoll            time.Duration
 	RabbitMQURL           string
 	RabbitMQInsightsDLQ   string
 	RabbitMQInsightsQueue string
 	AIProvider            string
 	AIProviderAPIKey      string
+	AIProviderBaseURL     string
 	AIModel               string
 	AIRequestTimeout      time.Duration
 	InsightMaxAttempts    int
@@ -63,6 +68,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	outboxPollMS, err := getEnvInt("OUTBOX_POLL_INTERVAL_MS", defaultOutboxPollMS)
+	if err != nil {
+		return Config{}, err
+	}
+
+	outboxBatchSize, err := getEnvInt("OUTBOX_BATCH_SIZE", defaultOutboxBatchSize)
+	if err != nil {
+		return Config{}, err
+	}
+
 	if requestTimeoutMS <= 0 {
 		return Config{}, fmt.Errorf("AI_REQUEST_TIMEOUT_MS must be greater than zero")
 	}
@@ -79,16 +94,27 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("INSIGHT_RETRY_BATCH_SIZE must be greater than zero")
 	}
 
+	if outboxPollMS <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_POLL_INTERVAL_MS must be greater than zero")
+	}
+
+	if outboxBatchSize <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_BATCH_SIZE must be greater than zero")
+	}
+
 	return Config{
 		NodeEnv:               getEnvString("NODE_ENV", defaultNodeEnv),
 		DatabaseURL:           getEnvString("DATABASE_URL", defaultDatabaseURL),
 		InsightRetryBatchSize: retryBatchSize,
 		InsightRetryPoll:      time.Duration(retryPollMS) * time.Millisecond,
+		OutboxBatchSize:       outboxBatchSize,
+		OutboxPoll:            time.Duration(outboxPollMS) * time.Millisecond,
 		RabbitMQURL:           getEnvString("RABBITMQ_URL", defaultRabbitMQURL),
 		RabbitMQInsightsDLQ:   getEnvString("RABBITMQ_INSIGHTS_DLQ", defaultRabbitMQInsightsDLQ),
 		RabbitMQInsightsQueue: getEnvString("RABBITMQ_INSIGHTS_QUEUE", defaultRabbitMQInsightsQueue),
 		AIProvider:            getEnvString("AI_PROVIDER", defaultAIProvider),
 		AIProviderAPIKey:      strings.TrimSpace(os.Getenv("AI_PROVIDER_API_KEY")),
+		AIProviderBaseURL:     strings.TrimSpace(os.Getenv("AI_PROVIDER_BASE_URL")),
 		AIModel:               getEnvString("AI_MODEL", defaultAIModel),
 		AIRequestTimeout:      time.Duration(requestTimeoutMS) * time.Millisecond,
 		InsightMaxAttempts:    maxAttempts,
@@ -101,6 +127,8 @@ func (c Config) LogAttrs() []any {
 		slog.String("database_url", maskURL(c.DatabaseURL)),
 		slog.Int("insight_retry_batch_size", c.InsightRetryBatchSize),
 		slog.Duration("insight_retry_poll", c.InsightRetryPoll),
+		slog.Int("outbox_batch_size", c.OutboxBatchSize),
+		slog.Duration("outbox_poll", c.OutboxPoll),
 		slog.String("rabbitmq_url", maskURL(c.RabbitMQURL)),
 		slog.String("rabbitmq_insights_dlq", c.RabbitMQInsightsDLQ),
 		slog.String("rabbitmq_insights_queue", c.RabbitMQInsightsQueue),
@@ -109,6 +137,7 @@ func (c Config) LogAttrs() []any {
 		slog.Duration("ai_request_timeout", c.AIRequestTimeout),
 		slog.Int("insight_max_attempts", c.InsightMaxAttempts),
 		slog.Bool("ai_provider_api_key_configured", c.AIProviderAPIKey != ""),
+		slog.Bool("ai_provider_base_url_configured", c.AIProviderBaseURL != ""),
 	}
 }
 

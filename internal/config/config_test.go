@@ -58,6 +58,7 @@ func TestLoadRejectsInvalidInteger(t *testing.T) {
 
 func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 	const apiKey = "secret-api-key"
+	const baseURL = "https://model-provider.example/v1"
 	cfg := Config{
 		NodeEnv:               "development",
 		DatabaseURL:           "postgresql://user:pass@localhost:5432/db",
@@ -68,6 +69,7 @@ func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 		RabbitMQInsightsQueue: "insights_queue",
 		AIProvider:            "openai",
 		AIProviderAPIKey:      apiKey,
+		AIProviderBaseURL:     baseURL,
 		AIModel:               "gpt-4o-mini",
 		AIRequestTimeout:      time.Minute,
 		InsightMaxAttempts:    3,
@@ -76,6 +78,10 @@ func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 	attrs := fmt.Sprint(cfg.LogAttrs())
 	if strings.Contains(attrs, apiKey) {
 		t.Fatal("LogAttrs() exposed AI_PROVIDER_API_KEY")
+	}
+
+	if strings.Contains(attrs, baseURL) {
+		t.Fatal("LogAttrs() exposed AI_PROVIDER_BASE_URL")
 	}
 
 	if strings.Contains(attrs, "user:pass") {

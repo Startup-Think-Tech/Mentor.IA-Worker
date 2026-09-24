@@ -1,9 +1,12 @@
-package insights
+package service
 
 import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/daviPeter07/ai-worker/internal/insights/prompt"
 )
 
 var (
@@ -12,10 +15,10 @@ var (
 )
 
 type Store interface {
-	BeginProcessing(ctx context.Context, message Message) (bool, error)
-	FindLowestPerformanceDisciplines(ctx context.Context, alunoID string, limit int) ([]DisciplinePerformance, error)
-	SaveInsightResult(ctx context.Context, message Message, content string, disciplines []DisciplinePerformance) error
-	RegisterFailure(ctx context.Context, message Message, maxAttempts int, code string, failure error) (FailureAction, error)
+	BeginProcessing(ctx context.Context, message domain.Message) (bool, error)
+	FindLowestPerformanceDisciplines(ctx context.Context, alunoID string, limit int) ([]domain.DisciplinePerformance, error)
+	SaveInsightResult(ctx context.Context, message domain.Message, content string, disciplines []domain.DisciplinePerformance) error
+	RegisterFailure(ctx context.Context, message domain.Message, maxAttempts int, code string, failure error) (domain.FailureAction, error)
 }
 
 type AIClient interface {
@@ -28,11 +31,11 @@ type Service struct {
 	maxAttempts int
 }
 
-func NewService(store Store, aiClient AIClient, maxAttempts int) *Service {
+func New(store Store, aiClient AIClient, maxAttempts int) *Service {
 	return &Service{store: store, aiClient: aiClient, maxAttempts: maxAttempts}
 }
 
-func (s *Service) Process(ctx context.Context, message Message) error {
+func (s *Service) Process(ctx context.Context, message domain.Message) error {
 	if s.store == nil {
 		return fmt.Errorf("store de insights nao configurado")
 	}
@@ -59,7 +62,7 @@ func (s *Service) Process(ctx context.Context, message Message) error {
 		return s.registerFailure(ctx, message, "DISCIPLINES_QUERY_FAILED", err)
 	}
 
-	content, err := s.aiClient.Complete(ctx, BuildPrompt(disciplines))
+	content, err := s.aiClient.Complete(ctx, prompt.Build(disciplines))
 	if err != nil {
 		return s.registerFailure(ctx, message, "AI_COMPLETION_FAILED", err)
 	}
@@ -71,13 +74,13 @@ func (s *Service) Process(ctx context.Context, message Message) error {
 	return nil
 }
 
-func (s *Service) registerFailure(ctx context.Context, message Message, code string, failure error) error {
+func (s *Service) registerFailure(ctx context.Context, message domain.Message, code string, failure error) error {
 	action, err := s.store.RegisterFailure(ctx, message, s.maxAttempts, code, failure)
 	if err != nil {
 		return fmt.Errorf("%w; falha adicional ao registrar erro: %w", failure, err)
 	}
 
-	if action == FailureActionFailed {
+	if action == domain.FailureActionFailed {
 		return fmt.Errorf("%w: %v", ErrJobFailed, failure)
 	}
 

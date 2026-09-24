@@ -8,7 +8,11 @@ import (
 
 	"github.com/daviPeter07/ai-worker/internal/ai/openrouter"
 	"github.com/daviPeter07/ai-worker/internal/config"
-	"github.com/daviPeter07/ai-worker/internal/insights"
+	insightoutbox "github.com/daviPeter07/ai-worker/internal/insights/outbox"
+	insightpostgres "github.com/daviPeter07/ai-worker/internal/insights/postgres"
+	insightretry "github.com/daviPeter07/ai-worker/internal/insights/retry"
+	insightservice "github.com/daviPeter07/ai-worker/internal/insights/service"
+	insightworker "github.com/daviPeter07/ai-worker/internal/insights/worker"
 	platformlogger "github.com/daviPeter07/ai-worker/internal/platform/logger"
 	"github.com/daviPeter07/ai-worker/internal/platform/postgres"
 	"github.com/daviPeter07/ai-worker/internal/platform/rabbitmq"
@@ -36,6 +40,7 @@ func main() {
 
 	aiClient, err := openrouter.New(openrouter.Config{
 		APIKey:  cfg.AIProviderAPIKey,
+		BaseURL: cfg.AIProviderBaseURL,
 		Model:   cfg.AIModel,
 		Timeout: cfg.AIRequestTimeout,
 	})
@@ -84,12 +89,14 @@ func main() {
 	}
 
 	logger.Info("worker aguardando mensagens de insights")
-	insightsRepository := insights.NewRepository(postgresClient.Pool())
-	insightsService := insights.NewService(insightsRepository, aiClient, cfg.InsightMaxAttempts)
-	retryScheduler := insights.NewRetryScheduler(logger, insightsRepository, rabbitClient, cfg.InsightRetryPoll, cfg.InsightRetryBatchSize)
+	insightsRepository := insightpostgres.NewRepository(postgresClient.Pool())
+	insightsService := insightservice.New(insightsRepository, aiClient, cfg.InsightMaxAttempts)
+	retryScheduler := insightretry.NewScheduler(logger, insightsRepository, cfg.InsightRetryPoll, cfg.InsightRetryBatchSize)
 	go retryScheduler.Run(ctx)
+	outboxDispatcher := insightoutbox.NewDispatcher(logger, insightsRepository, rabbitClient, cfg.OutboxPoll, cfg.OutboxBatchSize)
+	go outboxDispatcher.Run(ctx)
 
-	insightsConsumer := insights.NewConsumer(logger, insightsService, rabbitClient)
+	insightsConsumer := insightworker.NewConsumer(logger, insightsService, rabbitClient)
 	insightsConsumer.Run(ctx, deliveries)
 	logger.Info("worker de insights finalizado")
 }

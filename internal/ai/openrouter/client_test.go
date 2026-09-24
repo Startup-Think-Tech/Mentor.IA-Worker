@@ -10,7 +10,14 @@ import (
 )
 
 func TestNewRejectsEmptyAPIKey(t *testing.T) {
-	_, err := New(Config{Model: "openrouter/free"})
+	_, err := New(Config{BaseURL: "http://example.test", Model: "openrouter/free"})
+	if err == nil {
+		t.Fatal("New() returned nil error")
+	}
+}
+
+func TestNewRejectsEmptyBaseURL(t *testing.T) {
+	_, err := New(Config{APIKey: "test-key", Model: "openrouter/free"})
 	if err == nil {
 		t.Fatal("New() returned nil error")
 	}
@@ -65,7 +72,7 @@ func TestComplete(t *testing.T) {
 }
 
 func TestCompleteRejectsEmptyPrompt(t *testing.T) {
-	client, err := New(Config{APIKey: "test-key", Model: "openrouter/free"})
+	client, err := New(Config{APIKey: "test-key", BaseURL: "http://example.test", Model: "openrouter/free"})
 	if err != nil {
 		t.Fatalf("New() returned error: %v", err)
 	}

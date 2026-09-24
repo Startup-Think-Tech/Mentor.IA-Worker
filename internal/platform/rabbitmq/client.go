@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -21,6 +22,8 @@ type Config struct {
 type Client struct {
 	connection *amqp.Connection
 	channel    *amqp.Channel
+	confirmMu  sync.Mutex
+	confirms   <-chan amqp.Confirmation
 	queue      amqp.Queue
 	dlq        amqp.Queue
 }
@@ -52,6 +55,13 @@ func Connect(config Config) (*Client, error) {
 		_ = connection.Close()
 		return nil, fmt.Errorf("falha ao abrir canal do RabbitMQ: %w", err)
 	}
+
+	if err := channel.Confirm(false); err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return nil, fmt.Errorf("falha ao habilitar publisher confirms do RabbitMQ: %w", err)
+	}
+	confirms := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
 
 	queue, err := channel.QueueDeclare(
 		config.Queue,
@@ -90,6 +100,7 @@ func Connect(config Config) (*Client, error) {
 	return &Client{
 		connection: connection,
 		channel:    channel,
+		confirms:   confirms,
 		queue:      queue,
 		dlq:        dlq,
 	}, nil
@@ -116,19 +127,12 @@ func (c *Client) PublishToDLQ(ctx context.Context, payload any) error {
 }
 
 func (c *Client) PublishRawToDLQ(ctx context.Context, body []byte) error {
-	return c.channel.PublishWithContext(
-		ctx,
-		"",
-		c.dlq.Name,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType:  "application/octet-stream",
-			DeliveryMode: amqp.Persistent,
-			Timestamp:    time.Now(),
-			Body:         body,
-		},
-	)
+	return c.publish(ctx, c.dlq.Name, amqp.Publishing{
+		ContentType:  "application/octet-stream",
+		DeliveryMode: amqp.Persistent,
+		Timestamp:    time.Now(),
+		Body:         body,
+	})
 }
 
 func (c *Client) publishJSON(ctx context.Context, routingKey string, payload any) error {
@@ -137,19 +141,43 @@ func (c *Client) publishJSON(ctx context.Context, routingKey string, payload any
 		return fmt.Errorf("falha ao serializar mensagem RabbitMQ: %w", err)
 	}
 
-	return c.channel.PublishWithContext(
+	return c.publish(ctx, routingKey, amqp.Publishing{
+		ContentType:  "application/json",
+		DeliveryMode: amqp.Persistent,
+		Timestamp:    time.Now(),
+		Body:         body,
+	})
+}
+
+func (c *Client) publish(ctx context.Context, routingKey string, publishing amqp.Publishing) error {
+	c.confirmMu.Lock()
+	defer c.confirmMu.Unlock()
+
+	if err := c.channel.PublishWithContext(
 		ctx,
 		"",
 		routingKey,
 		false,
 		false,
-		amqp.Publishing{
-			ContentType:  "application/json",
-			DeliveryMode: amqp.Persistent,
-			Timestamp:    time.Now(),
-			Body:         body,
-		},
-	)
+		publishing,
+	); err != nil {
+		return fmt.Errorf("falha ao publicar mensagem no RabbitMQ: %w", err)
+	}
+
+	select {
+	case confirmation, ok := <-c.confirms:
+		if !ok {
+			return fmt.Errorf("canal de confirmacao do RabbitMQ fechado")
+		}
+
+		if !confirmation.Ack {
+			return fmt.Errorf("RabbitMQ rejeitou publicacao")
+		}
+
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("contexto cancelado aguardando confirmacao do RabbitMQ: %w", ctx.Err())
+	}
 }
 
 func (c *Client) Consume(consumerName string) (<-chan amqp.Delivery, error) {

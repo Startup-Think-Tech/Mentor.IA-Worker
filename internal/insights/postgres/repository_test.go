@@ -1,12 +1,14 @@
-package insights
+package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/daviPeter07/ai-worker/internal/platform/postgres"
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	platformpostgres "github.com/daviPeter07/ai-worker/internal/platform/postgres"
 	"github.com/daviPeter07/ai-worker/internal/testsupport"
 	"github.com/google/uuid"
 )
@@ -22,7 +24,7 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	postgresClient, err := postgres.Connect(ctx, databaseURL)
+	postgresClient, err := platformpostgres.Connect(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("postgres.Connect() returned error: %v", err)
 	}
@@ -82,7 +84,7 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 	}
 
 	repository := NewRepository(pool)
-	alreadyHandled, err := repository.BeginProcessing(ctx, Message{JobID: jobID, AlunoID: alunoID})
+	alreadyHandled, err := repository.BeginProcessing(ctx, domain.Message{JobID: jobID, AlunoID: alunoID})
 	if err != nil {
 		t.Fatalf("BeginProcessing() returned error: %v", err)
 	}
@@ -100,7 +102,7 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 		t.Fatalf("len(disciplines) = %d, want 1", len(disciplines))
 	}
 
-	if err := repository.SaveInsightResult(ctx, Message{JobID: jobID, AlunoID: alunoID}, "Insight real", disciplines); err != nil {
+	if err := repository.SaveInsightResult(ctx, domain.Message{JobID: jobID, AlunoID: alunoID}, "Insight real", disciplines); err != nil {
 		t.Fatalf("SaveInsightResult() returned error: %v", err)
 	}
 
@@ -137,7 +139,7 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 	}
 }
 
-func TestRepositoryClaimDueRetryJobs(t *testing.T) {
+func TestRepositoryScheduleDueRetryJobs(t *testing.T) {
 	testsupport.LoadDotEnv(t)
 
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -148,7 +150,7 @@ func TestRepositoryClaimDueRetryJobs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	postgresClient, err := postgres.Connect(ctx, databaseURL)
+	postgresClient, err := platformpostgres.Connect(ctx, databaseURL)
 	if err != nil {
 		t.Fatalf("postgres.Connect() returned error: %v", err)
 	}
@@ -160,6 +162,7 @@ func TestRepositoryClaimDueRetryJobs(t *testing.T) {
 	email := "worker-retry-test-" + uuid.NewString() + "@mentor.local"
 
 	defer func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM outbox_eventos WHERE job_id = $1", jobID)
 		_, _ = pool.Exec(context.Background(), "DELETE FROM insight_jobs WHERE id = $1", jobID)
 		_, _ = pool.Exec(context.Background(), "DELETE FROM alunos WHERE id = $1", alunoID)
 	}()
@@ -179,17 +182,13 @@ func TestRepositoryClaimDueRetryJobs(t *testing.T) {
 	}
 
 	repository := NewRepository(pool)
-	messages, err := repository.ClaimDueRetryJobs(ctx, 10)
+	count, err := repository.ScheduleDueRetryJobs(ctx, 10)
 	if err != nil {
-		t.Fatalf("ClaimDueRetryJobs() returned error: %v", err)
+		t.Fatalf("ScheduleDueRetryJobs() returned error: %v", err)
 	}
 
-	if len(messages) != 1 {
-		t.Fatalf("len(messages) = %d, want 1", len(messages))
-	}
-
-	if messages[0].JobID != jobID || messages[0].AlunoID != alunoID {
-		t.Fatalf("message = %#v, want job %s aluno %s", messages[0], jobID, alunoID)
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
 	}
 
 	var status string
@@ -199,5 +198,28 @@ func TestRepositoryClaimDueRetryJobs(t *testing.T) {
 
 	if status != "pendente" {
 		t.Fatalf("status = %q, want pendente", status)
+	}
+
+	var eventType string
+	var payloadBytes []byte
+	var payload domain.Message
+	if err := pool.QueryRow(ctx, `
+		SELECT tipo, payload
+		FROM outbox_eventos
+		WHERE job_id = $1
+	`, jobID).Scan(&eventType, &payloadBytes); err != nil {
+		t.Fatalf("failed to select outbox event: %v", err)
+	}
+
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("failed to decode outbox payload: %v", err)
+	}
+
+	if eventType != domain.OutboxTypeInsightRetryRequested {
+		t.Fatalf("eventType = %q, want %q", eventType, domain.OutboxTypeInsightRetryRequested)
+	}
+
+	if payload.JobID != jobID || payload.AlunoID != alunoID {
+		t.Fatalf("payload = %#v, want job %s aluno %s", payload, jobID, alunoID)
 	}
 }

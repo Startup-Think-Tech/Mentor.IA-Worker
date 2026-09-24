@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const defaultBaseURL = "https://openrouter.ai/api/v1"
-
 type Client struct {
 	apiKey     string
 	baseURL    string
@@ -56,7 +54,7 @@ func New(config Config) (*Client, error) {
 
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	if baseURL == "" {
-		baseURL = defaultBaseURL
+		return nil, fmt.Errorf("AI_PROVIDER_BASE_URL nao pode estar vazia")
 	}
 
 	timeout := config.Timeout

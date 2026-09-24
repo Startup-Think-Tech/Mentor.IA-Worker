@@ -1,10 +1,12 @@
-package insights
+package worker
 
 import (
 	"context"
 	"errors"
 	"log/slog"
 
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/daviPeter07/ai-worker/internal/insights/service"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -14,8 +16,12 @@ type Delivery interface {
 	Nack(multiple bool, requeue bool) error
 }
 
+type Processor interface {
+	Process(ctx context.Context, message domain.Message) error
+}
+
 type Consumer struct {
-	service             *Service
+	processor           Processor
 	deadLetterPublisher DeadLetterPublisher
 	logger              *slog.Logger
 }
@@ -41,8 +47,8 @@ func (d amqpDelivery) Nack(multiple bool, requeue bool) error {
 	return d.delivery.Nack(multiple, requeue)
 }
 
-func NewConsumer(logger *slog.Logger, service *Service, deadLetterPublisher DeadLetterPublisher) *Consumer {
-	return &Consumer{logger: logger, service: service, deadLetterPublisher: deadLetterPublisher}
+func NewConsumer(logger *slog.Logger, processor Processor, deadLetterPublisher DeadLetterPublisher) *Consumer {
+	return &Consumer{logger: logger, processor: processor, deadLetterPublisher: deadLetterPublisher}
 }
 
 func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) {
@@ -65,7 +71,7 @@ func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) {
 }
 
 func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
-	message, err := ParseMessage(delivery.Body())
+	message, err := domain.ParseMessage(delivery.Body())
 	if err != nil {
 		c.logger.Error("mensagem de insight invalida", "erro", err)
 		if c.deadLetterPublisher != nil {
@@ -90,8 +96,8 @@ func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 		"aluno_id", message.AlunoID,
 	)
 
-	if err := c.service.Process(ctx, message); err != nil {
-		if errors.Is(err, ErrJobFailed) {
+	if err := c.processor.Process(ctx, message); err != nil {
+		if errors.Is(err, service.ErrJobFailed) {
 			c.logger.Error(
 				"processamento de insight falhou definitivamente",
 				"job_id", message.JobID,
@@ -117,7 +123,7 @@ func (c *Consumer) handleDelivery(ctx context.Context, delivery Delivery) {
 			return
 		}
 
-		if errors.Is(err, ErrRetryScheduled) {
+		if errors.Is(err, service.ErrRetryScheduled) {
 			c.logger.Error(
 				"processamento de insight agendado para retentativa",
 				"job_id", message.JobID,

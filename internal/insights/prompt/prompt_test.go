@@ -1,12 +1,14 @@
-package insights
+package prompt
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
 )
 
-func TestBuildPromptWithDisciplines(t *testing.T) {
-	prompt := BuildPrompt([]DisciplinePerformance{
+func TestBuildWithDisciplines(t *testing.T) {
+	prompt := Build([]domain.DisciplinePerformance{
 		{Nome: "Matematica", Percentual: 42.5},
 		{Nome: "Linguagens", Percentual: 55},
 	})
@@ -27,8 +29,8 @@ func TestBuildPromptWithDisciplines(t *testing.T) {
 	}
 }
 
-func TestBuildPromptWithoutDisciplines(t *testing.T) {
-	prompt := BuildPrompt(nil)
+func TestBuildWithoutDisciplines(t *testing.T) {
+	prompt := Build(nil)
 
 	if !strings.Contains(prompt, "ainda nao ha desempenho suficiente por disciplina") {
 		t.Fatal("prompt should explain missing performance data")

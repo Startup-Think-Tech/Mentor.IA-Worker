@@ -1,11 +1,13 @@
-package insights
+package prompt
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/daviPeter07/ai-worker/internal/insights/domain"
 )
 
-func BuildPrompt(disciplines []DisciplinePerformance) string {
+func Build(disciplines []domain.DisciplinePerformance) string {
 	var builder strings.Builder
 	builder.WriteString("Voce e um mentor educacional especializado no ENEM. ")
 	builder.WriteString("Escreva em portugues do Brasil, com tom acolhedor, direto e realista. ")
