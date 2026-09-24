@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
 )
 
 func TestBuildWithDisciplines(t *testing.T) {

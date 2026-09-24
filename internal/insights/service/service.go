@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
-	"github.com/daviPeter07/ai-worker/internal/insights/prompt"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/prompt"
 )
 
 var (
@@ -15,10 +15,10 @@ var (
 )
 
 type Store interface {
-	BeginProcessing(ctx context.Context, message domain.Message) (bool, error)
+	BeginProcessing(ctx context.Context, message domain.Message) (domain.ProcessingLease, bool, error)
 	FindLowestPerformanceDisciplines(ctx context.Context, alunoID string, limit int) ([]domain.DisciplinePerformance, error)
-	SaveInsightResult(ctx context.Context, message domain.Message, content string, disciplines []domain.DisciplinePerformance) error
-	RegisterFailure(ctx context.Context, message domain.Message, maxAttempts int, code string, failure error) (domain.FailureAction, error)
+	SaveInsightResult(ctx context.Context, lease domain.ProcessingLease, content string, disciplines []domain.DisciplinePerformance) error
+	RegisterFailure(ctx context.Context, lease domain.ProcessingLease, maxAttempts int, code string, failure error) (domain.FailureAction, error)
 }
 
 type AIClient interface {
@@ -48,7 +48,7 @@ func (s *Service) Process(ctx context.Context, message domain.Message) error {
 		return fmt.Errorf("maxAttempts deve ser maior que zero")
 	}
 
-	alreadyHandled, err := s.store.BeginProcessing(ctx, message)
+	lease, alreadyHandled, err := s.store.BeginProcessing(ctx, message)
 	if err != nil {
 		return fmt.Errorf("falha ao iniciar processamento do insight: %w", err)
 	}
@@ -59,24 +59,37 @@ func (s *Service) Process(ctx context.Context, message domain.Message) error {
 
 	disciplines, err := s.store.FindLowestPerformanceDisciplines(ctx, message.AlunoID, 3)
 	if err != nil {
-		return s.registerFailure(ctx, message, "DISCIPLINES_QUERY_FAILED", err)
+		return s.registerFailure(ctx, lease, "DISCIPLINES_QUERY_FAILED", err)
 	}
 
 	content, err := s.aiClient.Complete(ctx, prompt.Build(disciplines))
 	if err != nil {
-		return s.registerFailure(ctx, message, "AI_COMPLETION_FAILED", err)
+		return s.registerFailure(ctx, lease, "AI_COMPLETION_FAILED", err)
 	}
 
-	if err := s.store.SaveInsightResult(ctx, message, content, disciplines); err != nil {
-		return s.registerFailure(ctx, message, "INSIGHT_SAVE_FAILED", err)
+	if err := s.store.SaveInsightResult(ctx, lease, content, disciplines); err != nil {
+		if errors.Is(err, domain.ErrProcessingLeaseLost) {
+			return nil
+		}
+
+		return s.registerFailure(ctx, lease, "INSIGHT_SAVE_FAILED", err)
 	}
 
 	return nil
 }
 
-func (s *Service) registerFailure(ctx context.Context, message domain.Message, code string, failure error) error {
-	action, err := s.store.RegisterFailure(ctx, message, s.maxAttempts, code, failure)
+func (s *Service) registerFailure(ctx context.Context, lease domain.ProcessingLease, code string, failure error) error {
+	maxAttempts := s.maxAttempts
+	if !isRetryable(failure) {
+		maxAttempts = 1
+	}
+
+	action, err := s.store.RegisterFailure(ctx, lease, maxAttempts, code, failure)
 	if err != nil {
+		if errors.Is(err, domain.ErrProcessingLeaseLost) {
+			return nil
+		}
+
 		return fmt.Errorf("%w; falha adicional ao registrar erro: %w", failure, err)
 	}
 
@@ -85,4 +98,13 @@ func (s *Service) registerFailure(ctx context.Context, message domain.Message, c
 	}
 
 	return fmt.Errorf("%w: %v", ErrRetryScheduled, failure)
+}
+
+func isRetryable(err error) bool {
+	var retryable interface{ Retryable() bool }
+	if errors.As(err, &retryable) {
+		return retryable.Retryable()
+	}
+
+	return true
 }

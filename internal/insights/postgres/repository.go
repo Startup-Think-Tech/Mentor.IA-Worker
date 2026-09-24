@@ -6,28 +6,43 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
+	generated "github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/postgres/sqlc/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool          *pgxpool.Pool
+	queries       *generated.Queries
+	leaseDuration time.Duration
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, leaseDuration time.Duration) *Repository {
+	return &Repository{pool: pool, queries: generated.New(pool), leaseDuration: leaseDuration}
 }
 
-func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message) (bool, error) {
-	var claimedID string
+func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message) (domain.ProcessingLease, bool, error) {
+	if r.leaseDuration <= 0 {
+		return domain.ProcessingLease{}, false, fmt.Errorf("leaseDuration deve ser maior que zero")
+	}
+
+	token := uuid.NewString()
+	leaseSeconds := int(r.leaseDuration.Seconds())
+	if leaseSeconds <= 0 {
+		return domain.ProcessingLease{}, false, fmt.Errorf("leaseDuration deve ter pelo menos um segundo")
+	}
+
+	var claimedToken string
 	err := r.pool.QueryRow(ctx, `
 		UPDATE insight_jobs
 		SET status = 'processando',
 		    tentativas = tentativas + 1,
-		    lease_expira_em = NOW() + INTERVAL '5 minutes',
+		    processing_token = $3,
+		    lease_expira_em = NOW() + ($4::int * INTERVAL '1 second'),
 		    proxima_tentativa_em = NULL,
 		    erro_codigo = NULL,
 		    erro_resumo = NULL,
@@ -39,10 +54,10 @@ func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message
 		    OR (status = 'aguardando_retentativa' AND COALESCE(proxima_tentativa_em <= NOW(), true))
 		    OR (status = 'processando' AND lease_expira_em <= NOW())
 		  )
-		RETURNING id::text
-	`, message.JobID, message.AlunoID).Scan(&claimedID)
+		RETURNING processing_token::text
+	`, message.JobID, message.AlunoID, token, leaseSeconds).Scan(&claimedToken)
 	if err == nil {
-		return false, nil
+		return domain.ProcessingLease{Message: message, Token: claimedToken}, false, nil
 	}
 
 	if err != nil {
@@ -55,55 +70,49 @@ func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message
 					WHERE id = $1 AND aluno_id = $2
 				)
 			`, message.JobID, message.AlunoID).Scan(&exists); existsErr != nil {
-				return false, fmt.Errorf("falha ao verificar job nao adquirido: %w", existsErr)
+				return domain.ProcessingLease{}, false, fmt.Errorf("falha ao verificar job nao adquirido: %w", existsErr)
 			}
 
 			if !exists {
-				return false, fmt.Errorf("job de insight nao encontrado: %s", message.JobID)
+				return domain.ProcessingLease{}, false, fmt.Errorf("job de insight nao encontrado: %s", message.JobID)
 			}
 
-			return true, nil
+			return domain.ProcessingLease{}, true, nil
 		}
 
-		return false, fmt.Errorf("falha ao adquirir job de insight: %w", err)
+		return domain.ProcessingLease{}, false, fmt.Errorf("falha ao adquirir job de insight: %w", err)
 	}
 
-	return false, nil
+	return domain.ProcessingLease{}, false, nil
 }
 
 func (r *Repository) FindLowestPerformanceDisciplines(ctx context.Context, alunoID string, limit int) ([]domain.DisciplinePerformance, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT d.id::text, d.nome, AVG(rd.percentual)::float8 AS percentual_medio
-		FROM registros_desempenho rd
-		JOIN disciplinas d ON d.id = rd.disciplina_id
-		WHERE rd.aluno_id = $1 AND d.ativo = true
-		GROUP BY d.id, d.nome
-		ORDER BY percentual_medio ASC, d.nome ASC
-		LIMIT $2
-	`, alunoID, limit)
+	parsedAlunoID, err := uuid.Parse(alunoID)
+	if err != nil {
+		return nil, fmt.Errorf("aluno_id invalido: %w", err)
+	}
+
+	rows, err := r.queries.FindLowestPerformanceDisciplines(ctx, generated.FindLowestPerformanceDisciplinesParams{
+		AlunoID: parsedAlunoID,
+		Limit:   int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar disciplinas de menor desempenho: %w", err)
 	}
-	defer rows.Close()
 
 	disciplines := make([]domain.DisciplinePerformance, 0, limit)
-	for rows.Next() {
-		var discipline domain.DisciplinePerformance
-		if err := rows.Scan(&discipline.ID, &discipline.Nome, &discipline.Percentual); err != nil {
-			return nil, fmt.Errorf("falha ao ler disciplina de menor desempenho: %w", err)
-		}
-
-		disciplines = append(disciplines, discipline)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("falha ao iterar disciplinas de menor desempenho: %w", err)
+	for _, row := range rows {
+		disciplines = append(disciplines, domain.DisciplinePerformance{
+			ID:         row.ID.String(),
+			Nome:       row.Nome,
+			Percentual: row.PercentualMedio,
+		})
 	}
 
 	return disciplines, nil
 }
 
-func (r *Repository) SaveInsightResult(ctx context.Context, message domain.Message, content string, disciplines []domain.DisciplinePerformance) error {
+func (r *Repository) SaveInsightResult(ctx context.Context, lease domain.ProcessingLease, content string, disciplines []domain.DisciplinePerformance) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("falha ao iniciar transacao para salvar insight: %w", err)
@@ -112,6 +121,29 @@ func (r *Repository) SaveInsightResult(ctx context.Context, message domain.Messa
 		_ = tx.Rollback(ctx)
 	}()
 
+	commandTag, err := tx.Exec(ctx, `
+		UPDATE insight_jobs
+		SET status = 'concluido',
+		    concluido_em = NOW(),
+		    atualizado_em = NOW(),
+		    processing_token = NULL,
+		    lease_expira_em = NULL,
+		    proxima_tentativa_em = NULL,
+		    erro_codigo = NULL,
+		    erro_resumo = NULL
+		WHERE id = $1
+		  AND aluno_id = $2
+		  AND status = 'processando'
+		  AND processing_token = $3
+	`, lease.Message.JobID, lease.Message.AlunoID, lease.Token)
+	if err != nil {
+		return fmt.Errorf("falha ao marcar job como concluido: %w", err)
+	}
+
+	if commandTag.RowsAffected() == 0 {
+		return domain.ErrProcessingLeaseLost
+	}
+
 	var insightID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO insights (id, aluno_id, job_id, conteudo)
@@ -119,7 +151,7 @@ func (r *Repository) SaveInsightResult(ctx context.Context, message domain.Messa
 		ON CONFLICT (job_id) DO UPDATE
 		SET conteudo = EXCLUDED.conteudo
 		RETURNING id::text
-	`, uuid.NewString(), message.AlunoID, message.JobID, content).Scan(&insightID); err != nil {
+	`, uuid.NewString(), lease.Message.AlunoID, lease.Message.JobID, content).Scan(&insightID); err != nil {
 		return fmt.Errorf("falha ao salvar insight: %w", err)
 	}
 
@@ -137,20 +169,6 @@ func (r *Repository) SaveInsightResult(ctx context.Context, message domain.Messa
 		}
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE insight_jobs
-		SET status = 'concluido',
-		    concluido_em = NOW(),
-		    atualizado_em = NOW(),
-		    lease_expira_em = NULL,
-		    proxima_tentativa_em = NULL,
-		    erro_codigo = NULL,
-		    erro_resumo = NULL
-		WHERE id = $1 AND aluno_id = $2
-	`, message.JobID, message.AlunoID); err != nil {
-		return fmt.Errorf("falha ao marcar job como concluido: %w", err)
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("falha ao confirmar insight: %w", err)
 	}
@@ -158,7 +176,7 @@ func (r *Repository) SaveInsightResult(ctx context.Context, message domain.Messa
 	return nil
 }
 
-func (r *Repository) RegisterFailure(ctx context.Context, message domain.Message, maxAttempts int, code string, failure error) (domain.FailureAction, error) {
+func (r *Repository) RegisterFailure(ctx context.Context, lease domain.ProcessingLease, maxAttempts int, code string, failure error) (domain.FailureAction, error) {
 	summary := strings.TrimSpace(failure.Error())
 	if len(summary) > 500 {
 		summary = summary[:500]
@@ -177,12 +195,20 @@ func (r *Repository) RegisterFailure(ctx context.Context, message domain.Message
 		    END,
 		    erro_codigo = $4,
 		    erro_resumo = $5,
+		    processing_token = NULL,
 		    lease_expira_em = NULL,
 		    atualizado_em = NOW()
-		WHERE id = $1 AND aluno_id = $2
+		WHERE id = $1
+		  AND aluno_id = $2
+		  AND status = 'processando'
+		  AND processing_token = $6
 		RETURNING status::text
-	`, message.JobID, message.AlunoID, maxAttempts, code, summary).Scan(&status)
+	`, lease.Message.JobID, lease.Message.AlunoID, maxAttempts, code, summary, lease.Token).Scan(&status)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", domain.ErrProcessingLeaseLost
+		}
+
 		return "", fmt.Errorf("falha ao registrar erro do job de insight: %w", err)
 	}
 
@@ -240,6 +266,8 @@ func (r *Repository) ScheduleDueRetryJobs(ctx context.Context, limit int) (int, 
 		if _, err := tx.Exec(ctx, `
 			UPDATE insight_jobs
 			SET status = 'pendente',
+			    processing_token = NULL,
+			    lease_expira_em = NULL,
 			    proxima_tentativa_em = NULL,
 			    atualizado_em = NOW()
 			WHERE id = $1 AND aluno_id = $2
@@ -262,59 +290,130 @@ func (r *Repository) ScheduleDueRetryJobs(ctx context.Context, limit int) (int, 
 	return len(messages), nil
 }
 
-func (r *Repository) DispatchPendingOutboxEvents(ctx context.Context, limit int, publish domain.OutboxPublisher) (int, error) {
+func (r *Repository) ClaimPendingOutboxEvents(ctx context.Context, limit int, lockDuration time.Duration) ([]domain.OutboxEvent, error) {
+	if lockDuration <= 0 {
+		return nil, fmt.Errorf("lockDuration deve ser maior que zero")
+	}
+
+	lockSeconds := int(lockDuration.Seconds())
+	if lockSeconds <= 0 {
+		return nil, fmt.Errorf("lockDuration deve ter pelo menos um segundo")
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("falha ao iniciar transacao de outbox: %w", err)
+		return nil, fmt.Errorf("falha ao iniciar transacao de claim da outbox: %w", err)
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
 
+	token := uuid.NewString()
 	rows, err := tx.Query(ctx, `
-		SELECT id::text, tipo, payload
-		FROM outbox_eventos
-		WHERE publicado_em IS NULL
-		ORDER BY criado_em ASC
-		LIMIT $1
-		FOR UPDATE SKIP LOCKED
-	`, limit)
+		WITH eventos_disponiveis AS (
+			SELECT id
+			FROM outbox_eventos
+			WHERE (status = 'pending' AND proxima_tentativa_em <= NOW())
+			   OR (status = 'processing' AND lock_expira_em <= NOW())
+			ORDER BY proxima_tentativa_em ASC, criado_em ASC
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE outbox_eventos oe
+		SET status = 'processing',
+		    processing_token = $2,
+		    lock_expira_em = NOW() + ($3::int * INTERVAL '1 second'),
+		    tentativas = oe.tentativas + 1
+		FROM eventos_disponiveis ed
+		WHERE oe.id = ed.id
+		RETURNING oe.id::text, oe.tipo, oe.payload, oe.processing_token::text, oe.tentativas
+	`, limit, token, lockSeconds)
 	if err != nil {
-		return 0, fmt.Errorf("falha ao buscar eventos de outbox: %w", err)
+		return nil, fmt.Errorf("falha ao buscar eventos de outbox: %w", err)
 	}
 	defer rows.Close()
 
 	events := make([]domain.OutboxEvent, 0, limit)
 	for rows.Next() {
 		var event domain.OutboxEvent
-		if err := rows.Scan(&event.ID, &event.Type, &event.Payload); err != nil {
-			return 0, fmt.Errorf("falha ao ler evento de outbox: %w", err)
+		if err := rows.Scan(&event.ID, &event.Type, &event.Payload, &event.ProcessingToken, &event.Attempts); err != nil {
+			return nil, fmt.Errorf("falha ao ler evento de outbox: %w", err)
 		}
 
 		events = append(events, event)
 	}
 
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("falha ao iterar eventos de outbox: %w", err)
-	}
-
-	for _, event := range events {
-		if err := publish(ctx, event); err != nil {
-			return 0, fmt.Errorf("falha ao publicar evento de outbox %s: %w", event.ID, err)
-		}
-
-		if _, err := tx.Exec(ctx, `
-			UPDATE outbox_eventos
-			SET publicado_em = NOW()
-			WHERE id = $1
-		`, event.ID); err != nil {
-			return 0, fmt.Errorf("falha ao marcar evento de outbox como publicado: %w", err)
-		}
+		return nil, fmt.Errorf("falha ao iterar eventos de outbox: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("falha ao confirmar eventos de outbox: %w", err)
+		return nil, fmt.Errorf("falha ao confirmar claim de eventos da outbox: %w", err)
 	}
 
-	return len(events), nil
+	return events, nil
+}
+
+func (r *Repository) MarkOutboxEventPublished(ctx context.Context, event domain.OutboxEvent) error {
+	commandTag, err := r.pool.Exec(ctx, `
+		UPDATE outbox_eventos
+		SET status = 'published',
+		    publicado_em = NOW(),
+		    processing_token = NULL,
+		    lock_expira_em = NULL,
+		    erro_resumo = NULL
+		WHERE id = $1
+		  AND status = 'processing'
+		  AND processing_token = $2
+	`, event.ID, event.ProcessingToken)
+	if err != nil {
+		return fmt.Errorf("falha ao marcar evento de outbox como publicado: %w", err)
+	}
+
+	if commandTag.RowsAffected() == 0 {
+		return domain.ErrOutboxDispatchLost
+	}
+
+	return nil
+}
+
+func (r *Repository) MarkOutboxEventFailed(ctx context.Context, event domain.OutboxEvent, maxAttempts int, failure error) (bool, error) {
+	if maxAttempts <= 0 {
+		return false, fmt.Errorf("maxAttempts deve ser maior que zero")
+	}
+
+	summary := strings.TrimSpace(failure.Error())
+	if len(summary) > 500 {
+		summary = summary[:500]
+	}
+
+	retrySeconds := min(300, max(5, event.Attempts*15))
+	var status string
+	err := r.pool.QueryRow(ctx, `
+		UPDATE outbox_eventos
+		SET status = CASE
+		      WHEN tentativas >= $3 THEN 'failed'
+		      ELSE 'pending'
+		    END,
+		    erro_resumo = $4,
+		    proxima_tentativa_em = CASE
+		      WHEN tentativas >= $3 THEN proxima_tentativa_em
+		      ELSE NOW() + ($5::int * INTERVAL '1 second')
+		    END,
+		    processing_token = NULL,
+		    lock_expira_em = NULL
+		WHERE id = $1
+		  AND status = 'processing'
+		  AND processing_token = $2
+		RETURNING status
+	`, event.ID, event.ProcessingToken, maxAttempts, summary, retrySeconds).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, domain.ErrOutboxDispatchLost
+		}
+
+		return false, fmt.Errorf("falha ao registrar falha de evento da outbox: %w", err)
+	}
+
+	return status == "failed", nil
 }

@@ -5,27 +5,33 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
 )
 
 type fakeStore struct {
-	beginCalled      bool
-	findCalled       bool
-	saveCalled       bool
-	failureCalled    bool
-	alreadyHandled   bool
-	beginErr         error
-	findErr          error
-	saveErr          error
-	failureAction    domain.FailureAction
-	disciplines      []domain.DisciplinePerformance
-	savedContent     string
-	savedDisciplines []domain.DisciplinePerformance
+	beginCalled        bool
+	findCalled         bool
+	saveCalled         bool
+	failureCalled      bool
+	alreadyHandled     bool
+	beginErr           error
+	findErr            error
+	saveErr            error
+	failureAction      domain.FailureAction
+	failureMaxAttempts int
+	lease              domain.ProcessingLease
+	disciplines        []domain.DisciplinePerformance
+	savedContent       string
+	savedDisciplines   []domain.DisciplinePerformance
 }
 
-func (s *fakeStore) BeginProcessing(context.Context, domain.Message) (bool, error) {
+func (s *fakeStore) BeginProcessing(_ context.Context, message domain.Message) (domain.ProcessingLease, bool, error) {
 	s.beginCalled = true
-	return s.alreadyHandled, s.beginErr
+	if s.lease.Token == "" {
+		s.lease = domain.ProcessingLease{Message: message, Token: "token-1"}
+	}
+
+	return s.lease, s.alreadyHandled, s.beginErr
 }
 
 func (s *fakeStore) FindLowestPerformanceDisciplines(context.Context, string, int) ([]domain.DisciplinePerformance, error) {
@@ -33,15 +39,16 @@ func (s *fakeStore) FindLowestPerformanceDisciplines(context.Context, string, in
 	return s.disciplines, s.findErr
 }
 
-func (s *fakeStore) SaveInsightResult(_ context.Context, _ domain.Message, content string, disciplines []domain.DisciplinePerformance) error {
+func (s *fakeStore) SaveInsightResult(_ context.Context, _ domain.ProcessingLease, content string, disciplines []domain.DisciplinePerformance) error {
 	s.saveCalled = true
 	s.savedContent = content
 	s.savedDisciplines = disciplines
 	return s.saveErr
 }
 
-func (s *fakeStore) RegisterFailure(context.Context, domain.Message, int, string, error) (domain.FailureAction, error) {
+func (s *fakeStore) RegisterFailure(_ context.Context, _ domain.ProcessingLease, maxAttempts int, _ string, _ error) (domain.FailureAction, error) {
 	s.failureCalled = true
+	s.failureMaxAttempts = maxAttempts
 	if s.failureAction == "" {
 		return domain.FailureActionRetry, nil
 	}
@@ -54,6 +61,11 @@ type fakeAIClient struct {
 	err     error
 	called  bool
 }
+
+type permanentError struct{}
+
+func (permanentError) Error() string   { return "unauthorized" }
+func (permanentError) Retryable() bool { return false }
 
 func (c *fakeAIClient) Complete(context.Context, string) (string, error) {
 	c.called = true
@@ -119,5 +131,38 @@ func TestServiceProcessRegistersFinalFailure(t *testing.T) {
 	err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"})
 	if !errors.Is(err, ErrJobFailed) {
 		t.Fatalf("Process() error = %v, want ErrJobFailed", err)
+	}
+
+}
+
+func TestServiceProcessFailsImmediatelyForPermanentError(t *testing.T) {
+	store := &fakeStore{failureAction: domain.FailureActionFailed}
+	aiClient := &fakeAIClient{err: permanentError{}}
+	service := New(store, aiClient, 3)
+
+	err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"})
+	if !errors.Is(err, ErrJobFailed) {
+		t.Fatalf("Process() error = %v, want ErrJobFailed", err)
+	}
+
+	if store.failureMaxAttempts != 1 {
+		t.Fatalf("failureMaxAttempts = %d, want 1", store.failureMaxAttempts)
+	}
+}
+
+func TestServiceProcessSkipsStaleLease(t *testing.T) {
+	store := &fakeStore{
+		disciplines: []domain.DisciplinePerformance{{ID: "disciplina-1", Nome: "Matematica", Percentual: 42}},
+		saveErr:     domain.ErrProcessingLeaseLost,
+	}
+	aiClient := &fakeAIClient{content: "Insight real"}
+	service := New(store, aiClient, 3)
+
+	if err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"}); err != nil {
+		t.Fatalf("Process() returned error: %v", err)
+	}
+
+	if store.failureCalled {
+		t.Fatal("stale lease should not register failure")
 	}
 }

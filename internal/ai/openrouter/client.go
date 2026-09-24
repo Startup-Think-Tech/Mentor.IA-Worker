@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +25,29 @@ type Config struct {
 	BaseURL string
 	Model   string
 	Timeout time.Duration
+}
+
+type APIError struct {
+	StatusCode int
+	Code       string
+	Retry      bool
+	Err        error
+}
+
+func (e *APIError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("OpenRouter retornou %s (status %d): %v", e.Code, e.StatusCode, e.Err)
+	}
+
+	return fmt.Sprintf("OpenRouter retornou %s: %v", e.Code, e.Err)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
+
+func (e *APIError) Retryable() bool {
+	return e.Retry
 }
 
 type chatRequest struct {
@@ -104,7 +129,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("falha ao chamar OpenRouter: %w", err)
+		return "", classifyTransportError(err)
 	}
 	defer response.Body.Close()
 
@@ -114,7 +139,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("OpenRouter retornou status %d: %s", response.StatusCode, string(responseBody))
+		return "", newAPIError(response.StatusCode, string(responseBody))
 	}
 
 	var chatResponse chatResponse
@@ -132,4 +157,53 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	}
 
 	return content, nil
+}
+
+func classifyTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &APIError{Code: "timeout", Retry: true, Err: err}
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return &APIError{Code: "request_canceled", Retry: true, Err: err}
+	}
+
+	var networkError net.Error
+	if errors.As(err, &networkError) {
+		return &APIError{Code: "network_error", Retry: true, Err: err}
+	}
+
+	return &APIError{Code: "request_error", Retry: true, Err: err}
+}
+
+func newAPIError(statusCode int, responseBody string) error {
+	code := "http_error"
+	retryable := false
+
+	switch {
+	case statusCode == http.StatusBadRequest:
+		code = "bad_request"
+	case statusCode == http.StatusUnauthorized:
+		code = "unauthorized"
+	case statusCode == http.StatusForbidden:
+		code = "forbidden"
+	case statusCode == http.StatusTooManyRequests:
+		code = "rate_limited"
+		retryable = true
+	case statusCode >= http.StatusInternalServerError:
+		code = "server_error"
+		retryable = true
+	}
+
+	responseBody = strings.TrimSpace(responseBody)
+	if len(responseBody) > 1000 {
+		responseBody = responseBody[:1000]
+	}
+
+	return &APIError{
+		StatusCode: statusCode,
+		Code:       code,
+		Retry:      retryable,
+		Err:        errors.New(responseBody),
+	}
 }

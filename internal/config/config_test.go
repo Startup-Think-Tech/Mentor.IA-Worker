@@ -8,26 +8,31 @@ import (
 )
 
 func TestLoadUsesDefaults(t *testing.T) {
-	t.Setenv("NODE_ENV", "")
+	t.Setenv("APP_ENV", "")
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("RABBITMQ_URL", "")
 	t.Setenv("RABBITMQ_INSIGHTS_DLQ", "")
 	t.Setenv("RABBITMQ_INSIGHTS_QUEUE", "")
+	t.Setenv("RABBITMQ_PREFETCH", "")
+	t.Setenv("WORKER_CONCURRENCY", "")
 	t.Setenv("AI_PROVIDER", "")
 	t.Setenv("AI_PROVIDER_API_KEY", "")
 	t.Setenv("AI_MODEL", "")
 	t.Setenv("AI_REQUEST_TIMEOUT_MS", "")
+	t.Setenv("INSIGHT_PROCESSING_LEASE_SECONDS", "")
 	t.Setenv("INSIGHT_MAX_ATTEMPTS", "")
 	t.Setenv("INSIGHT_RETRY_BATCH_SIZE", "")
 	t.Setenv("INSIGHT_RETRY_POLL_INTERVAL_MS", "")
+	t.Setenv("OUTBOX_LOCK_SECONDS", "")
+	t.Setenv("OUTBOX_MAX_ATTEMPTS", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.NodeEnv != defaultNodeEnv {
-		t.Fatalf("NodeEnv = %q, want %q", cfg.NodeEnv, defaultNodeEnv)
+	if cfg.AppEnv != defaultAppEnv {
+		t.Fatalf("AppEnv = %q, want %q", cfg.AppEnv, defaultAppEnv)
 	}
 
 	if cfg.AIRequestTimeout != defaultAIRequestTimeoutMS*time.Millisecond {
@@ -36,6 +41,10 @@ func TestLoadUsesDefaults(t *testing.T) {
 
 	if cfg.InsightMaxAttempts != defaultInsightMaxAttempts {
 		t.Fatalf("InsightMaxAttempts = %d, want %d", cfg.InsightMaxAttempts, defaultInsightMaxAttempts)
+	}
+
+	if cfg.InsightLease != defaultInsightLeaseSeconds*time.Second {
+		t.Fatalf("InsightLease = %s, want %s", cfg.InsightLease, defaultInsightLeaseSeconds*time.Second)
 	}
 
 	if cfg.RabbitMQInsightsDLQ != defaultRabbitMQInsightsDLQ {
@@ -56,11 +65,34 @@ func TestLoadRejectsInvalidInteger(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingProductionConfiguration(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("RABBITMQ_URL", "")
+	t.Setenv("AI_PROVIDER_API_KEY", "")
+	t.Setenv("AI_PROVIDER_BASE_URL", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
+func TestLoadRejectsPrefetchBelowConcurrency(t *testing.T) {
+	t.Setenv("WORKER_CONCURRENCY", "2")
+	t.Setenv("RABBITMQ_PREFETCH", "1")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() returned nil error")
+	}
+}
+
 func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 	const apiKey = "secret-api-key"
 	const baseURL = "https://model-provider.example/v1"
 	cfg := Config{
-		NodeEnv:               "development",
+		AppEnv:                "development",
 		DatabaseURL:           "postgresql://user:pass@localhost:5432/db",
 		InsightRetryBatchSize: 10,
 		InsightRetryPoll:      time.Minute,
@@ -72,6 +104,7 @@ func TestLogAttrsDoNotExposeSecrets(t *testing.T) {
 		AIProviderBaseURL:     baseURL,
 		AIModel:               "gpt-4o-mini",
 		AIRequestTimeout:      time.Minute,
+		InsightLease:          2 * time.Minute,
 		InsightMaxAttempts:    3,
 	}
 

@@ -32,16 +32,16 @@ internal/
 ## Responsabilidades
 
 - `cmd/insights-worker`: composition root do processo.
-- `internal/ai/openrouter`: cliente HTTP para Chat Completions do provedor configurado.
+- `internal/ai/openrouter`: cliente HTTP para Chat Completions e classificação de erros retryáveis.
 - `internal/config`: leitura e validação de variáveis de ambiente.
 - `internal/insights/domain`: tipos compartilhados do fluxo de insights.
 - `internal/insights/service`: caso de uso de geração e persistência do insight.
-- `internal/insights/worker`: consumer RabbitMQ e ACK/NACK/DLQ.
-- `internal/insights/postgres`: queries PostgreSQL e transactional outbox.
+- `internal/insights/worker`: consumer RabbitMQ, worker pool limitado e ACK/NACK/DLQ.
+- `internal/insights/postgres`: transações PostgreSQL, transactional outbox e query tipada gerada por `sqlc`.
 - `internal/insights/retry`: scheduler que agenda retries vencidos.
 - `internal/insights/outbox`: dispatcher que publica eventos pendentes da outbox.
 - `internal/insights/prompt`: montagem do prompt educacional.
-- `internal/platform/*`: integrações técnicas de logger, PostgreSQL e RabbitMQ.
+- `internal/platform/rabbitmq`: conexão compartilhada com canais separados para consumo e publicação.
 - `internal/testsupport`: helpers reutilizáveis para testes.
 
 ## Makefile
@@ -57,6 +57,8 @@ make vet
 make test
 make test-v
 make test-race
+make test-integration
+make sqlc-generate
 make test-cover
 make coverage-html
 make check
@@ -93,20 +95,26 @@ O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHT
 
 Mensagens válidas são processadas no PostgreSQL e recebem `Ack`. Mensagens inválidas são publicadas na DLQ e confirmadas com `Ack`. Falhas persistidas no banco como retry ou falha definitiva também recebem `Ack`. Falhas inesperadas de infraestrutura recebem `Nack` com requeue.
 
+O consumer usa worker pool limitado por `WORKER_CONCURRENCY`. `RABBITMQ_PREFETCH` deve ser maior ou igual à concorrência para manter backpressure coerente.
+
 ## Processamento
 
 Ao receber uma mensagem válida, o worker:
 
 - Faz claim atômico do `InsightJob` com `UPDATE ... RETURNING`.
-- Marca o job como `processando`, incrementa `tentativas` e define lease temporário.
+- Marca o job como `processando`, incrementa `tentativas`, gera `processing_token` e define lease temporário.
 - Busca até três disciplinas de menor desempenho.
 - Monta um prompt educacional curto.
 - Chama o provedor de IA com `AI_MODEL`.
 - Salva o conteúdo gerado em `insights`.
 - Associa as disciplinas usadas em `insights_disciplinas`.
-- Marca o job como `concluido` e limpa o lease.
+- Marca o job como `concluido` validando `processing_token` e limpa o lease.
 
-Se a geração ou persistência falhar, o job é atualizado para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou` e enviado para `RABBITMQ_INSIGHTS_DLQ`.
+O `processing_token` protege contra stale workers. Se um worker perder o lease e outro worker readquirir o job, o worker antigo não consegue salvar resultado nem registrar falha usando o token anterior.
+
+Erros de rede, timeout, `429` e `5xx` do provedor de IA geram retry. Erros permanentes, como `400`, `401` e `403`, falham definitivamente sem gastar tentativas adicionais.
+
+Se a geração ou persistência falhar de forma retryável, o job é atualizado para `aguardando_retentativa` enquanto houver tentativas disponíveis. Ao atingir `INSIGHT_MAX_ATTEMPTS`, o job é marcado como `falhou` e enviado para `RABBITMQ_INSIGHTS_DLQ`.
 
 ## Retry, Outbox E DLQ
 
@@ -116,7 +124,11 @@ Fluxo atual:
 
 - O scheduler busca jobs com `status = aguardando_retentativa` e `proxima_tentativa_em <= NOW()`.
 - Na mesma transação, marca o job como `pendente` e cria um evento em `outbox_eventos`.
-- O dispatcher busca eventos não publicados, publica no RabbitMQ com publisher confirms e marca `publicado_em`.
+- O dispatcher faz claim curto de eventos `pending`, usando token e lock temporário, e confirma a transação antes de publicar.
+- Fora da transação PostgreSQL, ele publica no RabbitMQ com `mandatory=true`, publisher confirms e tratamento de retornos não roteáveis.
+- Após confirmação, marca o evento como `published`; em falhas, agenda novo retry com backoff. Eventos que excedem `OUTBOX_MAX_ATTEMPTS` ficam em `failed` e não bloqueiam os demais.
+
+O RabbitMQ usa uma conexão compartilhada com dois channels: um para `Consume`/`Ack`/`Nack` e outro para publicação/DLQ/publisher confirms. A política é fail-fast: queda inesperada da conexão encerra o processo com erro para reinício pelo orquestrador.
 
 A DLQ recebe:
 
@@ -126,24 +138,33 @@ A DLQ recebe:
 ## Variáveis De Ambiente
 
 ```env
-NODE_ENV="development"
+APP_ENV="development"
 DATABASE_URL="postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 RABBITMQ_URL="amqp://mentor_ia:mentor_ia@localhost:5672"
 RABBITMQ_INSIGHTS_QUEUE="insights_queue"
 RABBITMQ_INSIGHTS_DLQ="insights_dlq"
+WORKER_CONCURRENCY=1
+RABBITMQ_PREFETCH=1
 AI_PROVIDER="openrouter"
 AI_PROVIDER_API_KEY=""
 AI_PROVIDER_BASE_URL=""
 AI_MODEL="openrouter/free"
 AI_REQUEST_TIMEOUT_MS=60000
+INSIGHT_PROCESSING_LEASE_SECONDS=120
 INSIGHT_MAX_ATTEMPTS=3
 INSIGHT_RETRY_POLL_INTERVAL_MS=30000
 INSIGHT_RETRY_BATCH_SIZE=10
 OUTBOX_POLL_INTERVAL_MS=5000
 OUTBOX_BATCH_SIZE=50
+OUTBOX_LOCK_SECONDS=30
+OUTBOX_MAX_ATTEMPTS=5
 ```
 
 `AI_PROVIDER_BASE_URL` é obrigatório em runtime e não possui fallback hardcoded no binário.
+
+`INSIGHT_PROCESSING_LEASE_SECONDS` precisa ser maior que `AI_REQUEST_TIMEOUT_MS`, para evitar que uma chamada de IA válida perca o lease antes de terminar.
+
+Em `APP_ENV=production`, `DATABASE_URL`, `RABBITMQ_URL`, `AI_PROVIDER_API_KEY` e `AI_PROVIDER_BASE_URL` são obrigatórias. Não há fallback de desenvolvimento para essas variáveis.
 
 ## Setup Local
 
@@ -202,6 +223,20 @@ Gerar cobertura:
 ```bash
 make test-cover
 make coverage-html
+```
+
+Rodar integrações sem `.env`, usando containers efêmeros de PostgreSQL e RabbitMQ:
+
+```bash
+make test-integration
+```
+
+O GitHub Actions executa build, `go vet`, testes, race detector e a suíte Testcontainers em pushes e pull requests.
+
+Regenerar a query tipada do `sqlc`:
+
+```bash
+make sqlc-generate
 ```
 
 Testes específicos com integrações reais usando `.env`:

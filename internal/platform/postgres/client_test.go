@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daviPeter07/ai-worker/internal/testsupport"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/testsupport"
 )
 
 func TestConnectRejectsEmptyDatabaseURL(t *testing.T) {

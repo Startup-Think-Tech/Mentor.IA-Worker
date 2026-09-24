@@ -2,6 +2,7 @@ package retry
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -26,10 +27,9 @@ func NewScheduler(logger *slog.Logger, store Store, interval time.Duration, batc
 	}
 }
 
-func (s *Scheduler) Run(ctx context.Context) {
+func (s *Scheduler) Run(ctx context.Context) error {
 	if s.interval <= 0 || s.batchSize <= 0 {
-		s.logger.Error("scheduler de retry desabilitado por configuracao invalida")
-		return
+		return fmt.Errorf("scheduler de retry com configuracao invalida")
 	}
 
 	s.logger.Info("scheduler de retry iniciado", "intervalo", s.interval, "lote", s.batchSize)
@@ -42,7 +42,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			s.logger.Info("scheduler de retry finalizado")
-			return
+			return nil
 		case <-ticker.C:
 			s.publishDueJobs(ctx)
 		}

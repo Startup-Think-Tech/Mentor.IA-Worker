@@ -27,6 +27,10 @@ download: ## Download Go module dependencies
 tidy: ## Tidy Go module dependencies
 	go mod tidy
 
+.PHONY: sqlc-generate
+sqlc-generate: ## Generate typed PostgreSQL query code with sqlc
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+
 .PHONY: fmt
 fmt: ## Format Go packages used by the worker
 	go fmt $(PKGS)
@@ -46,6 +50,10 @@ test-v: ## Run tests with verbose output
 .PHONY: test-race
 test-race: ## Run tests with the race detector
 	go test -race $(PKGS)
+
+.PHONY: test-integration
+test-integration: ## Run PostgreSQL and RabbitMQ tests with Testcontainers
+	go test -tags=integration -v ./internal/integration
 
 .PHONY: test-cover
 test-cover: ## Run tests and write a coverage profile

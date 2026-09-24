@@ -29,7 +29,9 @@ func TestSchedulerSchedulesDueJobs(t *testing.T) {
 		10,
 	)
 
-	scheduler.Run(ctx)
+	if err := scheduler.Run(ctx); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
 
 	if !store.called {
 		t.Fatal("store was not called")

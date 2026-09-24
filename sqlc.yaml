@@ -1,0 +1,16 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "internal/insights/postgres/sqlc/schema"
+    queries: "internal/insights/postgres/sqlc/queries"
+    gen:
+      go:
+        package: "generated"
+        out: "internal/insights/postgres/sqlc/generated"
+        sql_package: "pgx/v5"
+        emit_interface: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"

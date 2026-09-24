@@ -3,11 +3,39 @@ package openrouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestAPIErrorRetryability(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		retryable  bool
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest, retryable: false},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, retryable: false},
+		{name: "forbidden", statusCode: http.StatusForbidden, retryable: false},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, retryable: true},
+		{name: "server error", statusCode: http.StatusBadGateway, retryable: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var apiErr *APIError
+			if !errors.As(newAPIError(test.statusCode, "erro"), &apiErr) {
+				t.Fatal("newAPIError() did not return APIError")
+			}
+
+			if apiErr.Retryable() != test.retryable {
+				t.Fatalf("Retryable() = %t, want %t", apiErr.Retryable(), test.retryable)
+			}
+		})
+	}
+}
 
 func TestNewRejectsEmptyAPIKey(t *testing.T) {
 	_, err := New(Config{BaseURL: "http://example.test", Model: "openrouter/free"})

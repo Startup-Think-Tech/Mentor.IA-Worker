@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/daviPeter07/ai-worker/internal/testsupport"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/testsupport"
 )
 
 func TestConnectRejectsEmptyURL(t *testing.T) {
@@ -47,9 +47,10 @@ func TestConnectWithEnv(t *testing.T) {
 	}
 
 	client, err := Connect(Config{
-		URL:   rabbitURL,
-		Queue: queueName,
-		DLQ:   dlqName,
+		URL:      rabbitURL,
+		Queue:    queueName,
+		DLQ:      dlqName,
+		Prefetch: 2,
 	})
 	if err != nil {
 		t.Fatalf("Connect() returned error: %v", err)
@@ -59,8 +60,8 @@ func TestConnectWithEnv(t *testing.T) {
 		t.Fatalf("QueueName() = %q, want %q", client.QueueName(), queueName)
 	}
 
-	if client.PrefetchCount() != prefetchCount {
-		t.Fatalf("PrefetchCount() = %d, want %d", client.PrefetchCount(), prefetchCount)
+	if client.PrefetchCount() != 2 {
+		t.Fatalf("PrefetchCount() = %d, want %d", client.PrefetchCount(), 2)
 	}
 
 	if client.DLQName() != dlqName {

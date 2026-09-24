@@ -5,9 +5,9 @@ import (
 	"os"
 )
 
-func New(nodeEnv string) *slog.Logger {
+func New(appEnv string) *slog.Logger {
 	level := slog.LevelInfo
-	if nodeEnv == "development" {
+	if appEnv == "development" {
 		level = slog.LevelDebug
 	}
 
@@ -17,6 +17,6 @@ func New(nodeEnv string) *slog.Logger {
 
 	return slog.New(handler).With(
 		slog.String("service", "insights-worker"),
-		slog.String("env", nodeEnv),
+		slog.String("env", appEnv),
 	)
 }

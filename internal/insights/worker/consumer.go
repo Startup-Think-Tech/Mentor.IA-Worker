@@ -3,10 +3,12 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sync"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
-	"github.com/daviPeter07/ai-worker/internal/insights/service"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/service"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -24,6 +26,7 @@ type Consumer struct {
 	processor           Processor
 	deadLetterPublisher DeadLetterPublisher
 	logger              *slog.Logger
+	concurrency         int
 }
 
 type DeadLetterPublisher interface {
@@ -47,25 +50,62 @@ func (d amqpDelivery) Nack(multiple bool, requeue bool) error {
 	return d.delivery.Nack(multiple, requeue)
 }
 
-func NewConsumer(logger *slog.Logger, processor Processor, deadLetterPublisher DeadLetterPublisher) *Consumer {
-	return &Consumer{logger: logger, processor: processor, deadLetterPublisher: deadLetterPublisher}
+func NewConsumer(logger *slog.Logger, processor Processor, deadLetterPublisher DeadLetterPublisher, concurrency int) *Consumer {
+	return &Consumer{logger: logger, processor: processor, deadLetterPublisher: deadLetterPublisher, concurrency: concurrency}
 }
 
-func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) {
-	c.logger.Info("consumer de insights iniciado")
+func (c *Consumer) Run(ctx context.Context, deliveries <-chan amqp.Delivery) error {
+	if c.concurrency <= 0 {
+		return fmt.Errorf("concorrencia do consumer deve ser maior que zero")
+	}
+
+	c.logger.Info("consumer de insights iniciado", "concorrencia", c.concurrency)
+
+	jobs := make(chan amqp.Delivery)
+	var workers sync.WaitGroup
+	for range c.concurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case delivery, ok := <-jobs:
+					if !ok {
+						return
+					}
+
+					c.handleDelivery(ctx, amqpDelivery{delivery: delivery})
+				}
+			}
+		}()
+	}
+
+	defer func() {
+		close(jobs)
+		workers.Wait()
+		c.logger.Info("consumer de insights finalizado")
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("consumer de insights finalizado")
-			return
+			return nil
 		case delivery, ok := <-deliveries:
 			if !ok {
-				c.logger.Info("canal de mensagens de insights fechado")
-				return
+				if ctx.Err() != nil {
+					return nil
+				}
+
+				return fmt.Errorf("canal de mensagens de insights fechado")
 			}
 
-			c.handleDelivery(ctx, amqpDelivery{delivery: delivery})
+			select {
+			case jobs <- delivery:
+			case <-ctx.Done():
+				return nil
+			}
 		}
 	}
 }

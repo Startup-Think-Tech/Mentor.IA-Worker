@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
-	"github.com/daviPeter07/ai-worker/internal/insights/service"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/service"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -72,6 +72,7 @@ func TestConsumerAcksValidMessage(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{},
 		&fakeDeadLetterPublisher{},
+		1,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -92,6 +93,7 @@ func TestConsumerNacksInvalidMessageWithoutRequeue(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{},
 		dlqPublisher,
+		1,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -115,6 +117,7 @@ func TestConsumerNacksUnexpectedProcessingErrorWithRequeue(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{err: context.Canceled},
 		&fakeDeadLetterPublisher{},
+		1,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -138,6 +141,7 @@ func TestConsumerAcksRetryScheduledError(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{err: fmt.Errorf("%w: failed", service.ErrRetryScheduled)},
 		&fakeDeadLetterPublisher{},
+		1,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -158,6 +162,7 @@ func TestConsumerPublishesFinalFailureToDLQ(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{err: fmt.Errorf("%w: failed", service.ErrJobFailed)},
 		dlqPublisher,
+		1,
 	)
 
 	consumer.handleDelivery(context.Background(), delivery)
@@ -180,6 +185,9 @@ func TestConsumerStopsWhenContextIsCanceled(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		&fakeProcessor{},
 		&fakeDeadLetterPublisher{},
+		1,
 	)
-	consumer.Run(ctx, deliveries)
+	if err := consumer.Run(ctx, deliveries); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
 }

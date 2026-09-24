@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daviPeter07/ai-worker/internal/insights/domain"
-	platformpostgres "github.com/daviPeter07/ai-worker/internal/platform/postgres"
-	"github.com/daviPeter07/ai-worker/internal/testsupport"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
+	platformpostgres "github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/platform/postgres"
+	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/testsupport"
 	"github.com/google/uuid"
 )
 
@@ -83,14 +83,18 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 		t.Fatalf("failed to insert registro desempenho: %v", err)
 	}
 
-	repository := NewRepository(pool)
-	alreadyHandled, err := repository.BeginProcessing(ctx, domain.Message{JobID: jobID, AlunoID: alunoID})
+	repository := NewRepository(pool, 2*time.Minute)
+	lease, alreadyHandled, err := repository.BeginProcessing(ctx, domain.Message{JobID: jobID, AlunoID: alunoID})
 	if err != nil {
 		t.Fatalf("BeginProcessing() returned error: %v", err)
 	}
 
 	if alreadyHandled {
 		t.Fatal("job should not be already handled")
+	}
+
+	if lease.Token == "" {
+		t.Fatal("lease token should not be empty")
 	}
 
 	disciplines, err := repository.FindLowestPerformanceDisciplines(ctx, alunoID, 3)
@@ -102,7 +106,7 @@ func TestRepositoryProcessesRealInsightResult(t *testing.T) {
 		t.Fatalf("len(disciplines) = %d, want 1", len(disciplines))
 	}
 
-	if err := repository.SaveInsightResult(ctx, domain.Message{JobID: jobID, AlunoID: alunoID}, "Insight real", disciplines); err != nil {
+	if err := repository.SaveInsightResult(ctx, lease, "Insight real", disciplines); err != nil {
 		t.Fatalf("SaveInsightResult() returned error: %v", err)
 	}
 
@@ -181,7 +185,7 @@ func TestRepositoryScheduleDueRetryJobs(t *testing.T) {
 		t.Fatalf("failed to insert retry job: %v", err)
 	}
 
-	repository := NewRepository(pool)
+	repository := NewRepository(pool, 2*time.Minute)
 	count, err := repository.ScheduleDueRetryJobs(ctx, 10)
 	if err != nil {
 		t.Fatalf("ScheduleDueRetryJobs() returned error: %v", err)
@@ -221,5 +225,31 @@ func TestRepositoryScheduleDueRetryJobs(t *testing.T) {
 
 	if payload.JobID != jobID || payload.AlunoID != alunoID {
 		t.Fatalf("payload = %#v, want job %s aluno %s", payload, jobID, alunoID)
+	}
+
+	events, err := repository.ClaimPendingOutboxEvents(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimPendingOutboxEvents() returned error: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+
+	if events[0].ProcessingToken == "" {
+		t.Fatal("claimed outbox event should have a processing token")
+	}
+
+	if err := repository.MarkOutboxEventPublished(ctx, events[0]); err != nil {
+		t.Fatalf("MarkOutboxEventPublished() returned error: %v", err)
+	}
+
+	var outboxStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM outbox_eventos WHERE id = $1`, events[0].ID).Scan(&outboxStatus); err != nil {
+		t.Fatalf("failed to select outbox status: %v", err)
+	}
+
+	if outboxStatus != "published" {
+		t.Fatalf("outbox status = %q, want published", outboxStatus)
 	}
 }
