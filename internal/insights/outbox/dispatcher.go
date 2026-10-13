@@ -100,10 +100,10 @@ func (d *Dispatcher) dispatch(ctx context.Context) {
 
 func (d *Dispatcher) publish(ctx context.Context, event domain.OutboxEvent) error {
 	switch event.Type {
-	case domain.OutboxTypeInsightRetryRequested:
+	case domain.OutboxTypeInsightRequested, domain.OutboxTypeInsightRetryRequested:
 		var message domain.Message
 		if err := json.Unmarshal(event.Payload, &message); err != nil {
-			return fmt.Errorf("payload de retry invalido: %w", err)
+			return fmt.Errorf("payload de solicitacao de insight invalido: %w", err)
 		}
 
 		return d.publisher.PublishInsightMessage(ctx, message)

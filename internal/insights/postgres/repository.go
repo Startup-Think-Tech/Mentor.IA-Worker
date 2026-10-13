@@ -36,7 +36,7 @@ func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message
 		return domain.ProcessingLease{}, false, fmt.Errorf("leaseDuration deve ter pelo menos um segundo")
 	}
 
-	var claimedToken string
+	var lease domain.ProcessingLease
 	err := r.pool.QueryRow(ctx, `
 		UPDATE insight_jobs
 		SET status = 'processando',
@@ -54,10 +54,11 @@ func (r *Repository) BeginProcessing(ctx context.Context, message domain.Message
 		    OR (status = 'aguardando_retentativa' AND COALESCE(proxima_tentativa_em <= NOW(), true))
 		    OR (status = 'processando' AND lease_expira_em <= NOW())
 		  )
-		RETURNING processing_token::text
-	`, message.JobID, message.AlunoID, token, leaseSeconds).Scan(&claimedToken)
+		RETURNING processing_token::text, criado_em, tentativas
+	`, message.JobID, message.AlunoID, token, leaseSeconds).Scan(&lease.Token, &lease.CreatedAt, &lease.Attempts)
 	if err == nil {
-		return domain.ProcessingLease{Message: message, Token: claimedToken}, false, nil
+		lease.Message = message
+		return lease, false, nil
 	}
 
 	if err != nil {

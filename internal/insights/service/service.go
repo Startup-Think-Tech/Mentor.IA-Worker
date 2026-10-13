@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/domain"
 	"github.com/Startup-Think-Tech/Mentor.IA-Worker/internal/insights/prompt"
@@ -29,13 +31,14 @@ type Service struct {
 	store       Store
 	aiClient    AIClient
 	maxAttempts int
+	logger      *slog.Logger
 }
 
-func New(store Store, aiClient AIClient, maxAttempts int) *Service {
-	return &Service{store: store, aiClient: aiClient, maxAttempts: maxAttempts}
+func New(logger *slog.Logger, store Store, aiClient AIClient, maxAttempts int) *Service {
+	return &Service{logger: logger, store: store, aiClient: aiClient, maxAttempts: maxAttempts}
 }
 
-func (s *Service) Process(ctx context.Context, message domain.Message) error {
+func (s *Service) Process(ctx context.Context, message domain.Message) (processErr error) {
 	if s.store == nil {
 		return fmt.Errorf("store de insights nao configurado")
 	}
@@ -57,6 +60,34 @@ func (s *Service) Process(ctx context.Context, message domain.Message) error {
 		return nil
 	}
 
+	processingStartedAt := time.Now()
+	result := "concluido"
+	defer func() {
+		if s.logger == nil {
+			return
+		}
+
+		if processErr != nil {
+			result = "erro_infraestrutura"
+		}
+		if errors.Is(processErr, ErrJobFailed) {
+			result = "falhou"
+		} else if errors.Is(processErr, ErrRetryScheduled) {
+			result = "retentativa_agendada"
+		}
+
+		s.logger.Info(
+			"metricas de processamento de insight",
+			"job_id", message.JobID,
+			"aluno_id", message.AlunoID,
+			"tentativa", lease.Attempts,
+			"espera_fila_ms", processingStartedAt.Sub(lease.CreatedAt).Milliseconds(),
+			"duracao_processamento_ms", time.Since(processingStartedAt).Milliseconds(),
+			"resultado", result,
+			"erro", processErr,
+		)
+	}()
+
 	disciplines, err := s.store.FindLowestPerformanceDisciplines(ctx, message.AlunoID, 3)
 	if err != nil {
 		return s.registerFailure(ctx, lease, "DISCIPLINES_QUERY_FAILED", err)
@@ -69,6 +100,7 @@ func (s *Service) Process(ctx context.Context, message domain.Message) error {
 
 	if err := s.store.SaveInsightResult(ctx, lease, content, disciplines); err != nil {
 		if errors.Is(err, domain.ErrProcessingLeaseLost) {
+			result = "lease_perdido"
 			return nil
 		}
 

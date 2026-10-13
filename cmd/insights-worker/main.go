@@ -99,7 +99,7 @@ func run(ctx context.Context) error {
 
 	logger.Info("worker aguardando mensagens de insights")
 	insightsRepository := insightpostgres.NewRepository(postgresClient.Pool(), cfg.InsightLease)
-	insightsService := insightservice.New(insightsRepository, aiClient, cfg.InsightMaxAttempts)
+	insightsService := insightservice.New(logger, insightsRepository, aiClient, cfg.InsightMaxAttempts)
 	retryScheduler := insightretry.NewScheduler(logger, insightsRepository, cfg.InsightRetryPoll, cfg.InsightRetryBatchSize)
 	outboxDispatcher := insightoutbox.NewDispatcher(logger, insightsRepository, rabbitClient, cfg.OutboxPoll, cfg.OutboxBatchSize, cfg.OutboxLock, cfg.OutboxMaxAttempts)
 	insightsConsumer := insightworker.NewConsumer(logger, insightsService, rabbitClient, cfg.WorkerConcurrency)

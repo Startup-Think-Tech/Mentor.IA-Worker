@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 )
 
 var (
@@ -18,8 +19,10 @@ type DisciplinePerformance struct {
 }
 
 type ProcessingLease struct {
-	Message Message
-	Token   string
+	Message   Message
+	Token     string
+	CreatedAt time.Time
+	Attempts  int
 }
 
 type FailureAction string
@@ -31,6 +34,7 @@ const (
 
 const (
 	OutboxTypeInsightFailed         = "insight.failed"
+	OutboxTypeInsightRequested      = "insight.requested"
 	OutboxTypeInsightRetryRequested = "insight.retry.requested"
 )
 
