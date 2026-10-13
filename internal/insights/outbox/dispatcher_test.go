@@ -114,3 +114,30 @@ func TestDispatcherPublishesFinalFailureToDLQ(t *testing.T) {
 		t.Fatalf("published events = %#v, want event-1", store.published)
 	}
 }
+
+func TestDispatcherPublishesInitialInsightRequest(t *testing.T) {
+	store := &fakeStore{events: []domain.OutboxEvent{
+		{
+			ID:       "event-1",
+			Type:     domain.OutboxTypeInsightRequested,
+			Payload:  []byte(`{"job_id":"job-1","aluno_id":"aluno-1"}`),
+			Attempts: 1,
+		},
+	}}
+	publisher := &fakePublisher{}
+	dispatcher := NewDispatcher(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		store,
+		publisher,
+		time.Second,
+		1,
+		time.Second,
+		3,
+	)
+
+	dispatcher.dispatch(context.Background())
+
+	if len(publisher.published) != 1 || publisher.published[0] != "job-1" {
+		t.Fatalf("published messages = %#v, want job-1", publisher.published)
+	}
+}

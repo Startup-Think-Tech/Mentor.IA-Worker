@@ -75,7 +75,7 @@ func (c *fakeAIClient) Complete(context.Context, string) (string, error) {
 func TestServiceProcessGeneratesAndSavesInsight(t *testing.T) {
 	store := &fakeStore{disciplines: []domain.DisciplinePerformance{{ID: "disciplina-1", Nome: "Matematica", Percentual: 42}}}
 	aiClient := &fakeAIClient{content: "Insight real"}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	if err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"}); err != nil {
 		t.Fatalf("Process() returned error: %v", err)
@@ -97,7 +97,7 @@ func TestServiceProcessGeneratesAndSavesInsight(t *testing.T) {
 func TestServiceProcessSkipsAlreadyHandledJob(t *testing.T) {
 	store := &fakeStore{alreadyHandled: true}
 	aiClient := &fakeAIClient{content: "Insight real"}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	if err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"}); err != nil {
 		t.Fatalf("Process() returned error: %v", err)
@@ -111,7 +111,7 @@ func TestServiceProcessSkipsAlreadyHandledJob(t *testing.T) {
 func TestServiceProcessRegistersRetryOnAIError(t *testing.T) {
 	store := &fakeStore{failureAction: domain.FailureActionRetry}
 	aiClient := &fakeAIClient{err: errors.New("openrouter unavailable")}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"})
 	if !errors.Is(err, ErrRetryScheduled) {
@@ -126,7 +126,7 @@ func TestServiceProcessRegistersRetryOnAIError(t *testing.T) {
 func TestServiceProcessRegistersFinalFailure(t *testing.T) {
 	store := &fakeStore{failureAction: domain.FailureActionFailed}
 	aiClient := &fakeAIClient{err: errors.New("openrouter failed")}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"})
 	if !errors.Is(err, ErrJobFailed) {
@@ -138,7 +138,7 @@ func TestServiceProcessRegistersFinalFailure(t *testing.T) {
 func TestServiceProcessFailsImmediatelyForPermanentError(t *testing.T) {
 	store := &fakeStore{failureAction: domain.FailureActionFailed}
 	aiClient := &fakeAIClient{err: permanentError{}}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"})
 	if !errors.Is(err, ErrJobFailed) {
@@ -156,7 +156,7 @@ func TestServiceProcessSkipsStaleLease(t *testing.T) {
 		saveErr:     domain.ErrProcessingLeaseLost,
 	}
 	aiClient := &fakeAIClient{content: "Insight real"}
-	service := New(store, aiClient, 3)
+	service := New(nil, store, aiClient, 3)
 
 	if err := service.Process(context.Background(), domain.Message{JobID: "job-1", AlunoID: "aluno-1"}); err != nil {
 		t.Fatalf("Process() returned error: %v", err)
