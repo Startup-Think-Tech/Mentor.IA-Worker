@@ -67,21 +67,6 @@ make run
 make clean
 ```
 
-Comandos Docker:
-
-```bash
-make docker-build
-make docker-up
-make docker-up-d
-make docker-down
-make docker-down-volumes
-make docker-logs
-make docker-ps
-make docker-restart
-```
-
-Não há alvo para `docker compose config` porque esse comando imprime variáveis interpoladas e pode expor secrets no terminal.
-
 ## Mensagem Esperada
 
 O worker espera receber mensagens JSON na fila configurada por `RABBITMQ_INSIGHTS_QUEUE`:
@@ -182,30 +167,28 @@ Para o worker iniciar completamente, PostgreSQL e RabbitMQ precisam estar acess�
 
 O provedor de IA também precisa estar configurado com `AI_PROVIDER_API_KEY`, `AI_PROVIDER_BASE_URL` e `AI_MODEL`. O worker falha no bootstrap se essas configurações obrigatórias estiverem ausentes.
 
-## Docker
+## Infraestrutura Local
 
-Subir em foreground:
+PostgreSQL e RabbitMQ são fornecidos pelo Compose da API. Inicie-os primeiro:
 
 ```bash
-make docker-up
+docker compose -f ../api/docker-compose.yml up -d postgres rabbitmq
 ```
 
-Subir em background:
+O Compose do worker contém somente o serviço `ai-worker` e conecta-se à rede
+externa `api_default` criada pelo Compose da API:
 
 ```bash
 make docker-up-d
 ```
 
-Parar:
+Caso o projeto Docker da API use outro nome, defina `API_COMPOSE_NETWORK` com
+o nome da rede antes de iniciar o worker.
+
+Para executar o worker fora do Docker, use:
 
 ```bash
-make docker-down
-```
-
-Remover volumes/orphans:
-
-```bash
-make docker-down-volumes
+make run
 ```
 
 ## Testes

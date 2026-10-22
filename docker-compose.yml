@@ -1,36 +1,33 @@
 services:
-  postgres:
-    image: postgres:17
+  ai-worker:
+    build: .
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: mentor_ia
-      POSTGRES_USER: mentor_ia
-      POSTGRES_PASSWORD: mentor_ia
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mentor_ia -d mentor_ia"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      APP_ENV: ${APP_ENV}
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: ${RABBITMQ_URL_DOCKER}
+      RABBITMQ_INSIGHTS_DLQ: ${RABBITMQ_INSIGHTS_DLQ}
+      RABBITMQ_INSIGHTS_QUEUE: ${RABBITMQ_INSIGHTS_QUEUE}
+      RABBITMQ_PREFETCH: ${RABBITMQ_PREFETCH}
+      RABBITMQ_PUBLISH_TIMEOUT_MS: ${RABBITMQ_PUBLISH_TIMEOUT_MS}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY}
+      AI_PROVIDER: ${AI_PROVIDER}
+      AI_PROVIDER_API_KEY: ${AI_PROVIDER_API_KEY}
+      AI_PROVIDER_BASE_URL: ${AI_PROVIDER_BASE_URL}
+      AI_MODEL: ${AI_MODEL}
+      AI_REQUEST_TIMEOUT_MS: ${AI_REQUEST_TIMEOUT_MS}
+      INSIGHT_PROCESSING_LEASE_SECONDS: ${INSIGHT_PROCESSING_LEASE_SECONDS}
+      INSIGHT_MAX_ATTEMPTS: ${INSIGHT_MAX_ATTEMPTS}
+      INSIGHT_RETRY_POLL_INTERVAL_MS: ${INSIGHT_RETRY_POLL_INTERVAL_MS}
+      INSIGHT_RETRY_BATCH_SIZE: ${INSIGHT_RETRY_BATCH_SIZE}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE}
+      OUTBOX_LOCK_SECONDS: ${OUTBOX_LOCK_SECONDS}
+      OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS}
+    networks:
+      - api-network
 
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    environment:
-      RABBITMQ_DEFAULT_USER: mentor_ia
-      RABBITMQ_DEFAULT_PASS: mentor_ia
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-
-volumes:
-  postgres_data:
-  rabbitmq_data:
+networks:
+  api-network:
+    external: true
+    name: ${API_COMPOSE_NETWORK:-api_default}

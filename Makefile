@@ -82,32 +82,25 @@ clean: ## Remove generated files
 	rm -rf $(BIN_DIR) $(COVERAGE_DIR)
 
 .PHONY: docker-build
-docker-build: ## Build Docker images
+docker-build: ## Build the worker image
 	docker compose build
 
 .PHONY: docker-up
-docker-up: ## Build and run Docker services in the foreground
+docker-up: ## Build and run the worker in the foreground
 	docker compose up --build
 
 .PHONY: docker-up-d
-docker-up-d: ## Build and run Docker services in the background
+docker-up-d: ## Build and run the worker in the background
 	docker compose up --build -d
 
 .PHONY: docker-down
-docker-down: ## Stop Docker services
+docker-down: ## Stop the worker container
 	docker compose down
 
-.PHONY: docker-down-volumes
-docker-down-volumes: ## Stop Docker services and remove volumes/orphans
-	docker compose down --volumes --remove-orphans
-
 .PHONY: docker-logs
-docker-logs: ## Follow Docker service logs
+docker-logs: ## Follow worker logs
 	docker compose logs -f
 
 .PHONY: docker-ps
-docker-ps: ## List Docker services
+docker-ps: ## List worker containers
 	docker compose ps
-
-.PHONY: docker-restart
-docker-restart: docker-down docker-up ## Restart Docker services in the foreground
