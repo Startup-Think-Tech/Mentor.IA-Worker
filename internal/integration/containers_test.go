@@ -157,6 +157,7 @@ func TestRepositoryReliabilityWithPostgresContainer(t *testing.T) {
 			lease_expira_em TIMESTAMP(3),
 			erro_codigo TEXT,
 			erro_resumo TEXT,
+			criado_em TIMESTAMP(3) NOT NULL DEFAULT NOW(),
 			atualizado_em TIMESTAMP(3) NOT NULL DEFAULT NOW(),
 			concluido_em TIMESTAMP(3)
 		)`,
