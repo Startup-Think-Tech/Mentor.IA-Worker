@@ -73,6 +73,9 @@ func TestComplete(t *testing.T) {
 		if request.Model != "openrouter/free" {
 			t.Fatalf("model = %q, want openrouter/free", request.Model)
 		}
+		if len(request.Messages) != 2 || request.Messages[0].Role != "system" {
+			t.Fatal("request must include the system instruction before the user prompt")
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Insight gerado"}}]}`))
@@ -96,6 +99,32 @@ func TestComplete(t *testing.T) {
 
 	if content != "Insight gerado" {
 		t.Fatalf("content = %q, want %q", content, "Insight gerado")
+	}
+}
+
+func TestCompleteRejectsSafetyClassification(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"User Safety: safe"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := New(Config{
+		APIKey:  "test-key",
+		BaseURL: server.URL,
+		Model:   "openrouter/free",
+	})
+	if err != nil {
+		t.Fatalf("New() returned error: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), "gere um insight")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Complete() error = %v, want APIError", err)
+	}
+	if apiErr.Code != "invalid_content" || !apiErr.Retryable() {
+		t.Fatalf("APIError = %+v, want retryable invalid_content", apiErr)
 	}
 }
 

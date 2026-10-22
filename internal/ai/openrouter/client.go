@@ -60,6 +60,8 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+const systemInstruction = "Voce e o Mentor.ia, um orientador educacional para estudantes do ENEM. Siga as instrucoes do usuario para gerar somente uma orientacao de estudos pratica e acolhedora. Nunca responda com classificacoes de seguranca, moderacao ou metadados do provedor."
+
 type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
@@ -106,6 +108,7 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	body, err := json.Marshal(chatRequest{
 		Model: c.model,
 		Messages: []chatMessage{
+			{Role: "system", Content: systemInstruction},
 			{Role: "user", Content: prompt},
 		},
 	})
@@ -155,8 +158,20 @@ func (c *Client) Complete(ctx context.Context, prompt string) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("OpenRouter retornou conteudo vazio")
 	}
+	if isSafetyClassification(content) {
+		return "", &APIError{
+			Code:  "invalid_content",
+			Retry: true,
+			Err:   errors.New("OpenRouter retornou classificacao de seguranca em vez de um insight"),
+		}
+	}
 
 	return content, nil
+}
+
+func isSafetyClassification(content string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	return normalized == "user safety: safe" || normalized == "user safety: unsafe"
 }
 
 func classifyTransportError(err error) error {

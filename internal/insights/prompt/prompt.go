@@ -20,6 +20,7 @@ func Build(disciplines []domain.DisciplinePerformance) string {
 	builder.WriteString("- Mencione no maximo duas disciplinas pelo nome, priorizando as piores.\n")
 	builder.WriteString("- Inclua uma acao pequena e concreta para hoje.\n")
 	builder.WriteString("- Evite tom de bronca, promessa de resultado ou diagnostico psicologico.\n\n")
+	builder.WriteString("- Nunca responda com classificacoes de seguranca, moderacao ou metadados.\n\n")
 
 	if len(disciplines) == 0 {
 		builder.WriteString("Dados disponiveis: ainda nao ha desempenho suficiente por disciplina. ")
