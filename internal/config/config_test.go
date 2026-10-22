@@ -10,6 +10,7 @@ import (
 func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("DATABASE_URL", "")
+	t.Setenv("DATABASE_HOST", "")
 	t.Setenv("RABBITMQ_URL", "")
 	t.Setenv("RABBITMQ_INSIGHTS_DLQ", "")
 	t.Setenv("RABBITMQ_INSIGHTS_QUEUE", "")
@@ -59,6 +60,21 @@ func TestLoadUsesDefaults(t *testing.T) {
 
 	if cfg.InsightRetryBatchSize != defaultInsightRetryBatchSize {
 		t.Fatalf("InsightRetryBatchSize = %d, want %d", cfg.InsightRetryBatchSize, defaultInsightRetryBatchSize)
+	}
+}
+
+func TestLoadUsesDatabaseHostOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public")
+	t.Setenv("DATABASE_HOST", "postgres")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	const want = "postgresql://mentor_ia:mentor_ia@postgres:5432/mentor_ia?schema=public"
+	if cfg.DatabaseURL != want {
+		t.Fatalf("DatabaseURL = %q, want %q", cfg.DatabaseURL, want)
 	}
 }
 

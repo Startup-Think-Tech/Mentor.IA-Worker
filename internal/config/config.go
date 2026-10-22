@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -194,7 +196,7 @@ func Load() (Config, error) {
 
 	return Config{
 		AppEnv:                 appEnv,
-		DatabaseURL:            getEnvString("DATABASE_URL", defaultDatabaseURL),
+		DatabaseURL:            getDatabaseURL(),
 		InsightRetryBatchSize:  retryBatchSize,
 		InsightRetryPoll:       time.Duration(retryPollMS) * time.Millisecond,
 		OutboxBatchSize:        outboxBatchSize,
@@ -215,6 +217,27 @@ func Load() (Config, error) {
 		InsightLease:           leaseDuration,
 		InsightMaxAttempts:     maxAttempts,
 	}, nil
+}
+
+func getDatabaseURL() string {
+	databaseURL := getEnvString("DATABASE_URL", defaultDatabaseURL)
+	databaseHost := strings.TrimSpace(os.Getenv("DATABASE_HOST"))
+	if databaseHost == "" {
+		return databaseURL
+	}
+
+	parsedURL, err := url.Parse(databaseURL)
+	if err != nil || parsedURL.Hostname() == "" {
+		return databaseURL
+	}
+
+	if port := parsedURL.Port(); port != "" {
+		parsedURL.Host = net.JoinHostPort(databaseHost, port)
+	} else {
+		parsedURL.Host = databaseHost
+	}
+
+	return parsedURL.String()
 }
 
 func (c Config) LogAttrs() []any {
