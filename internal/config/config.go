@@ -17,7 +17,7 @@ const (
 	defaultAppEnv                   = "development"
 	defaultDatabaseURL              = "postgresql://mentor_ia:mentor_ia@localhost:5432/mentor_ia?schema=public"
 	defaultInsightRetryBatchSize    = 10
-	defaultInsightRetryPollMS       = 30000
+	defaultInsightRetryPollMS       = 5000
 	defaultOutboxBatchSize          = 4
 	defaultOutboxPollMS             = 5000
 	defaultOutboxLockSeconds        = 30
@@ -28,7 +28,7 @@ const (
 	defaultRabbitMQPublishTimeoutMS = 5000
 	defaultAIProvider               = "openrouter"
 	defaultAIModel                  = "openrouter/free"
-	defaultAIRequestTimeoutMS       = 60000
+	defaultAIRequestTimeoutMS       = 20000
 	defaultInsightLeaseSeconds      = 120
 	defaultInsightMaxAttempts       = 3
 	defaultWorkerConcurrency        = 1
