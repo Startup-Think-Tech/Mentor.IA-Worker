@@ -138,10 +138,10 @@ AI_PROVIDER="openrouter"
 AI_PROVIDER_API_KEY=""
 AI_PROVIDER_BASE_URL=""
 AI_MODEL="openrouter/free"
-AI_REQUEST_TIMEOUT_MS=60000
+AI_REQUEST_TIMEOUT_MS=20000
 INSIGHT_PROCESSING_LEASE_SECONDS=120
 INSIGHT_MAX_ATTEMPTS=3
-INSIGHT_RETRY_POLL_INTERVAL_MS=30000
+INSIGHT_RETRY_POLL_INTERVAL_MS=5000
 INSIGHT_RETRY_BATCH_SIZE=10
 OUTBOX_POLL_INTERVAL_MS=5000
 OUTBOX_BATCH_SIZE=4
@@ -156,6 +156,9 @@ OUTBOX_MAX_ATTEMPTS=5
 Em `APP_ENV=production`, `DATABASE_URL`, `RABBITMQ_URL`, `AI_PROVIDER_API_KEY` e `AI_PROVIDER_BASE_URL` são obrigatórias. Não há fallback de desenvolvimento para essas variáveis.
 
 ## Setup Local
+
+O modo de desenvolvimento padrao executa o worker na maquina host. Nao inicie
+o servico `ai-worker` pelo Compose nesse modo, para evitar consumidores duplicados.
 
 ```bash
 cp .env.example .env
@@ -175,8 +178,9 @@ PostgreSQL e RabbitMQ são fornecidos pelo Compose da API. Inicie-os primeiro:
 docker compose -f ../api/docker-compose.yml up -d postgres rabbitmq
 ```
 
-O Compose do worker contém somente o serviço `ai-worker` e conecta-se à rede
-externa `api_default` criada pelo Compose da API:
+O Compose do worker e opcional e deve ser usado apenas quando for necessario
+executar o worker em container. Ele conecta-se à rede externa `api_default`
+criada pelo Compose da API:
 
 ```bash
 make docker-up-d
